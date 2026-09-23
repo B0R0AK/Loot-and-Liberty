@@ -32,6 +32,8 @@ Es gibt zwei Kanäle:
    - ↩️ **Entscheidung zurücksetzen**, z. B. nach einem Fehlklick (während der Rollzeit).
    - ⏰ **Rollzeit ändern**, gerechnet ab jetzt, z. B. „endet in 6 Stunden“.
    - ⏹️ **Rollen jetzt beenden** und **Ohne Gewinner schließen**.
+8. **Aufräumen:** Nach der Vergabe, oder wenn ohne Gewinner geschlossen wird, löscht der Bot im Leader-Kanal den Item-Post, das Panel und die Hinweise.
+   Stattdessen postet er eine **kompakte Ergebnis-Karte** mit kleinem Item-Bild, Gewinner, Wurf, Grund und Link zum Thread.
 
 ## Rechte
 
@@ -62,9 +64,9 @@ Voraussetzung: Node.js 22 oder neuer.
    - **Server Members Intent**: um alle Mitglieder einer Rolle zu finden.
    - **Message Content Intent**: um Screenshots, Links und @Erwähnungen im Leader-Kanal zu lesen.
 3. Den Bot mit den Scopes `bot` und `applications.commands` einladen. Dieser Link enthält alle nötigen Rechte (`DEINE_APP_ID` ersetzen):
-   `https://discord.com/oauth2/authorize?client_id=DEINE_APP_ID&scope=bot+applications.commands&permissions=326417632320`
+   `https://discord.com/oauth2/authorize?client_id=DEINE_APP_ID&scope=bot+applications.commands&permissions=326417640512`
 4. Zwei Kanäle anlegen: `#loot-leitung` (nur Leader) und `#loot` (alle). Der Bot braucht diese Rechte:
-   - **`#loot-leitung`**: Kanal ansehen, Nachrichten senden, Links einbetten, Nachrichtenverlauf lesen, Reaktionen hinzufügen.
+   - **`#loot-leitung`**: Kanal ansehen, Nachrichten senden, Links einbetten, Dateien anhängen, Nachrichtenverlauf lesen, Reaktionen hinzufügen, **Nachrichten verwalten** (zum Aufräumen nach der Vergabe).
    - **`#loot`**: Kanal ansehen, Nachrichten senden, Dateien anhängen, Links einbetten, Öffentliche Threads erstellen, Nachrichten in Threads senden, **Threads verwalten** (zum Schließen der Threads).
 5. Starten:
    ```bash

@@ -1,7 +1,7 @@
 import { MessageFlags, PermissionFlagsBits } from 'discord.js';
 import { commands } from './commands.js';
 import { detectItem, fetchLinkPreview } from './item.js';
-import { HELP_TEXT, hoursLabel, lootPayload, openSessionLine, panelView, pingChunks, promptView, renameModal, starterContent } from './render.js';
+import { HELP_TEXT, hoursLabel, lootPayload, openSessionLine, panelView, pingChunks, promptView, renameModal, starterContent, summaryEmbed } from './render.js';
 import { LootSession, purposeById } from './session.js';
 
 const DRAFT_TTL_MS = 30 * 60_000;
@@ -281,11 +281,43 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     const panel = await channel(session.panelChannelId);
     const users = [session.ownerId, ...session.managers.users];
     const who = [...session.managers.roles.map((id) => `<@&${id}>`), ...[...new Set(users)].map((id) => `<@${id}>`)].join(' ');
-    await panel.send({
+    const msg = await panel.send({
       content: `${text} ${who}`,
       reply: { messageReference: session.panelMessageId, failIfNotExists: false },
       allowedMentions: { users, roles: session.managers.roles },
     });
+    session.noticeIds.push(msg.id);
+    store.save();
+  }
+
+  /**
+   * Nach dem Abschluss den Leader-Kanal aufräumen: Item-Post des Leaders, Panel und
+   * Hinweise löschen und durch eine kompakte Ergebnis-Karte ersetzen.
+   * Das Bild kommt von der Item-Nachricht im Loot-Kanal (dauerhaft hochgeladen) und
+   * wird als kleines Vorschaubild neu angehängt. Den Leader-Post zu löschen braucht
+   * „Nachrichten verwalten“ im Leader-Kanal – fehlt das Recht, bleibt er stehen.
+   */
+  async function postSummaryAndCleanup(session) {
+    const leaderChannel = await channel(session.panelChannelId);
+    const starter = await channel(session.channelId)
+      .then((c) => c.messages.fetch(session.starterMessageId))
+      .catch(() => null);
+    const att = starter?.attachments.find((a) => a.contentType?.startsWith('image/'));
+    const file = att ? { attachment: att.url, name: att.name || 'item.png' } : null;
+
+    const base = { embeds: [summaryEmbed(session, file?.name)], allowedMentions: { parse: [] } };
+    const sent = file
+      ? await leaderChannel.send({ ...base, files: [file] }).catch(() => null)
+      : null;
+    if (!sent) {
+      await leaderChannel.send({ embeds: [summaryEmbed(session)], allowedMentions: { parse: [] } }).catch((err) => {
+        console.error('Ergebnis-Karte fehlgeschlagen:', err.message);
+      });
+    }
+
+    for (const id of [session.panelMessageId, ...session.noticeIds, session.id]) {
+      await leaderChannel.messages.delete(id).catch((err) => console.warn(`Aufräumen: Nachricht ${id} nicht gelöscht (${err.message})`));
+    }
   }
 
   // ---------- Darstellung ----------
@@ -388,6 +420,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       await thread.send('Verlosung ohne Gewinner geschlossen.');
     }
     await closeThread(thread);
+    await postSummaryAndCleanup(session);
   }
 
   async function handlePanel(interaction, action, id) {
