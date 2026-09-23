@@ -13,6 +13,7 @@ Es gibt zwei Kanäle:
    oder schreibt sie als `@Name` / `@Rolle` in den Leader-Kanal. `@Erwähnungen` im Item-Post werden direkt übernommen.
    Im zweiten Feld legt er fest, **wer die Verlosung verwaltet**: einzelne Leader, eine oder mehrere Leader-Rollen oder beides.
    Er selbst verwaltet immer mit. Im dritten Feld wählt er die **Rollzeit** (1–72 Stunden, Vorgabe per `/einrichten`).
+   Stimmt der erkannte Item-Name nicht, korrigiert er ihn mit **✏️ Namen ändern**. Das geht auch später noch im Panel.
    Dann klickt er auf **📣 Posten & Spieler pingen**.
 3. **Der Bot postet das Item mit Bild im Loot-Kanal** und öffnet daran einen **Thread** mit der Roll-Liste.
    Alle Ausgewählten werden im Thread angepingt. Bei einer Rolle wird jedes Mitglied einzeln angepingt.

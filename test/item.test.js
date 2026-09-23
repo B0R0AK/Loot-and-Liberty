@@ -29,3 +29,20 @@ test('detectItem: kein Item', () => {
   assert.equal(detectItem({ content: 'hallo <@1>' }), null);
   assert.equal(detectItem({ content: 'x', attachments: [{ url: 'a.txt', contentType: 'text/plain' }] }), null);
 });
+
+test('Titel aus Questlog-ähnlichem HTML (Reihenfolge, Apostroph, Entities)', async () => {
+  const { extractPreview, cleanTitle } = await import('../src/item.js');
+  const html = `<html><head><title>Lucent - Throne and Liberty Datenbank | Questlog</title>
+    <meta content="https://cdn.questlog.gg/x.webp" property="og:image">
+    <meta data-hid="og:title" property="og:title" content="Calanthia&#39;s Aegis - Throne and Liberty | Questlog">
+    <meta name='description' content='Ein Schild'></head></html>`;
+  assert.deepEqual(extractPreview(html), {
+    title: "Calanthia's Aegis",
+    image: 'https://cdn.questlog.gg/x.webp',
+    description: 'Ein Schild',
+  });
+  assert.equal(extractPreview('<title>Lucent | Questlog</title>').title, 'Lucent');
+  assert.equal(extractPreview("<meta property=\"og:title\" content=\"Calanthia's Aegis of Doom\">").title, "Calanthia's Aegis of Doom");
+  assert.equal(cleanTitle('Questlog | Throne and Liberty Database'), null);
+  assert.equal(cleanTitle('Sword-Of-Dawn | Questlog'), 'Sword-Of-Dawn');
+});
