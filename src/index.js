@@ -25,7 +25,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers, // Mitglieder einer Rolle auflösen
-    GatewayIntentBits.GuildMessages, // Posts im Loot-Kanal sehen
+    GatewayIntentBits.GuildMessages, // Posts im Loot- und Leader-Kanal sehen
     GatewayIntentBits.MessageContent, // Screenshots, Links und @Erwähnungen lesen
   ],
   partials: [Partials.Channel],
@@ -36,6 +36,7 @@ const bot = createLootBot({
   client,
   store,
   lootChannelIds,
+  leaderChannelId: process.env.LOOT_LEADER_CHANNEL_ID?.trim() || null,
   leaderRoleIds: list(process.env.LOOT_LEADER_ROLE_IDS),
   managerIds: list(process.env.LOOT_MANAGER_IDS),
 });

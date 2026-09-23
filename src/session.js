@@ -42,7 +42,9 @@ export class LootSession {
     this.channelId = rest.channelId ?? null;
     this.threadId = rest.threadId ?? null;
     this.messageId = rest.messageId ?? null;
-    this.promptMessageId = rest.promptMessageId ?? null;
+    this.panelChannelId = rest.panelChannelId ?? null;
+    this.panelMessageId = rest.panelMessageId ?? null;
+    this.sourceUrl = rest.sourceUrl ?? null;
     this.createdAt = rest.createdAt ?? Date.now();
     this.closed = false;
     this.closeReason = null;
@@ -81,6 +83,32 @@ export class LootSession {
     if (!res.ok) return res;
     Object.assign(res.participant, { status: Status.PASSED, at: Date.now() });
     return { ok: true };
+  }
+
+  /** Leader setzt eine Entscheidung zurück – der Spieler kann neu wählen. */
+  reset(userId) {
+    if (this.closed) return { ok: false, reason: 'closed' };
+    const p = this.participants.get(userId);
+    if (!p) return { ok: false, reason: 'not-eligible' };
+    if (p.status === Status.PENDING) return { ok: false, reason: 'still-pending' };
+    Object.assign(p, { status: Status.PENDING, roll: null, purpose: null, at: null });
+    return { ok: true };
+  }
+
+  /** Nachträglich Spieler hinzufügen. Gibt die wirklich neuen IDs zurück. */
+  addParticipants(ids, names = {}) {
+    if (this.closed) return [];
+    const added = ids.filter((id) => !this.participants.has(id));
+    for (const id of added) this.participants.set(id, { status: Status.PENDING, roll: null, purpose: null, at: null });
+    Object.assign(this.names, names);
+    return added;
+  }
+
+  /** Alle, die schon gewürfelt oder gepasst haben (für „Zurücksetzen“). */
+  decided() {
+    return [...this.participants.entries()]
+      .filter(([, p]) => p.status !== Status.PENDING)
+      .map(([userId, p]) => ({ userId, ...p }));
   }
 
   get allDecided() {

@@ -63,3 +63,30 @@ test('doppelte Teilnehmer werden zusammengeführt', () => {
   assert.equal(make(['a', 'a', 'b']).participants.size, 2);
   assert.throws(() => make([]));
 });
+
+test('Leader setzt eine Entscheidung zurück', () => {
+  const s = make();
+  s.roll('a', 'bis', () => 50);
+  s.pass('b');
+  assert.equal(s.reset('c').reason, 'still-pending');
+  assert.equal(s.reset('x').reason, 'not-eligible');
+  assert.deepEqual(s.decided().map((d) => d.userId), ['a', 'b']);
+  assert.equal(s.reset('b').ok, true);
+  assert.equal(s.participants.get('b').status, Status.PENDING);
+  assert.equal(s.roll('b', 'sell', () => 7).value, 7);
+  assert.equal(s.reset('a').ok, true);
+  assert.deepEqual(s.rolls().map((r) => r.userId), ['b']);
+});
+
+test('Spieler nachträglich hinzufügen', () => {
+  const s = make(['a']);
+  s.roll('a', 'bis', () => 10);
+  assert.deepEqual(s.addParticipants(['a', 'd', 'e'], { d: 'Dora' }), ['d', 'e']);
+  assert.equal(s.participants.get('a').roll, 10);
+  assert.equal(s.nameOf('d'), 'Dora');
+  assert.equal(s.allDecided, false);
+  assert.equal(s.roll('d', 'litho', () => 3).ok, true);
+  s.close('no-winner');
+  assert.deepEqual(s.addParticipants(['f']), []);
+  assert.equal(s.reset('a').reason, 'closed');
+});

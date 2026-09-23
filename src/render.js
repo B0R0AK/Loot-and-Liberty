@@ -23,26 +23,27 @@ function fit(items, sep, limit = FIELD_LIMIT) {
   return out || '–';
 }
 
-function itemEmbed(item, color) {
+function itemEmbed(item, color, { image = true } = {}) {
   const embed = new EmbedBuilder().setTitle(`💰 ${item.name}`).setColor(color);
   if (item.url) embed.setURL(item.url);
-  if (item.image) embed.setImage(item.image);
+  if (image && item.image) embed.setImage(item.image);
   return embed;
 }
 
-// ---------- Kanal: "Wer darf rollen?" ----------
+// ---------- Leader-Kanal: "Wer darf rollen?" ----------
 
 export function promptView(draft) {
   const { users, roles } = draft.selection;
   const picked = [...roles.map((id) => `<@&${id}>`), ...users.map((id) => `<@${id}>`)];
   const embed = itemEmbed(draft.item, COLORS.prompt)
     .setDescription(
-      `<@${draft.authorId}>, **wer darf rollen?**\n` +
-        'Wähle Spieler oder Rollen aus der Liste oder schreib sie mit `@Name` / `@Rolle` hier in den Kanal.',
+      `<@${draft.authorId}> hat ein Item gepostet${draft.sourceUrl ? ` ([zum Post](${draft.sourceUrl}))` : ''}.\n` +
+        '**Wer darf rollen?** Wähle Spieler oder Rollen aus der Liste oder schreib sie mit `@Name` / `@Rolle` hier in den Kanal.',
     )
     .addFields({ name: 'Ausgewählt', value: fit(picked, ', ') });
 
   return {
+    content: '',
     embeds: [embed],
     components: [
       new ActionRowBuilder().addComponents(
@@ -65,23 +66,62 @@ export function promptView(draft) {
   };
 }
 
-/** Kanal-Nachricht, nachdem der Thread erstellt wurde. */
-export function promptDoneView(session) {
-  const embed = new EmbedBuilder().setTitle(`💰 ${session.item.name}`);
-  if (session.item.url) embed.setURL(session.item.url);
-  const thread = `<#${session.threadId}>`;
-  if (session.winnerId) {
-    const p = session.participants.get(session.winnerId);
-    embed
-      .setColor(COLORS.won)
-      .setDescription(`🏆 Vergeben an <@${session.winnerId}> (**${p.roll}**, ${purposeById(p.purpose)?.label}) · ${thread}`);
-  } else if (session.closed) {
-    embed.setColor(COLORS.none).setDescription(`Ohne Gewinner geschlossen · ${thread}`);
-  } else {
-    const c = session.counts();
-    embed.setColor(COLORS.open).setDescription(`🎲 Rollen läuft in ${thread} · ${c.total - c.pending}/${c.total} haben entschieden`);
+// ---------- Leader-Kanal: Verwaltungs-Panel ----------
+
+export function panelView(session) {
+  const embed = lootEmbed(session, { panel: true });
+  if (session.closed) return { content: '', embeds: [embed], components: [] };
+
+  const rows = [];
+  const rolls = session.rolls().slice(0, MAX_SELECT);
+  if (rolls.length) {
+    rows.push(
+      new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`panel:winner:${session.id}`)
+          .setPlaceholder('👑 Gewinner auswählen …')
+          .addOptions(
+            rolls.map((r) => {
+              const p = purposeById(r.purpose);
+              return { label: `${session.nameOf(r.userId)} – ${r.roll}`.slice(0, 100), description: p.label, emoji: p.emoji, value: r.userId };
+            }),
+          ),
+      ),
+    );
   }
-  return { content: '', embeds: [embed], components: [] };
+  rows.push(
+    new ActionRowBuilder().addComponents(
+      new MentionableSelectMenuBuilder()
+        .setCustomId(`panel:add:${session.id}`)
+        .setPlaceholder('➕ Spieler oder Rollen hinzufügen …')
+        .setMinValues(1)
+        .setMaxValues(MAX_SELECT),
+    ),
+  );
+  const decided = session.decided().slice(0, MAX_SELECT);
+  if (decided.length) {
+    rows.push(
+      new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`panel:reset:${session.id}`)
+          .setPlaceholder('↩️ Entscheidung zurücksetzen …')
+          .addOptions(
+            decided.map((d) => ({
+              label: session.nameOf(d.userId).slice(0, 100),
+              description: d.status === Status.ROLLED ? `${d.roll} · ${purposeById(d.purpose).label}` : 'gepasst',
+              emoji: d.status === Status.ROLLED ? '🎲' : '🚫',
+              value: d.userId,
+            })),
+          ),
+      ),
+    );
+  }
+  rows.push(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`panel:close:${session.id}`).setLabel('Ohne Gewinner schließen').setStyle(ButtonStyle.Danger),
+    ),
+  );
+  return { content: '', embeds: [embed], components: rows };
 }
 
 // ---------- Thread: Roll-Liste ----------
@@ -101,12 +141,17 @@ function rollLines(session) {
   return lines;
 }
 
-export function lootEmbed(session) {
+/**
+ * Roll-Liste. Im Thread ohne Bild (der Item-Post steht direkt darüber),
+ * im Leader-Panel mit Bild und Link zum Thread.
+ */
+export function lootEmbed(session, { panel = false } = {}) {
   const c = session.counts();
   const color = !session.closed ? COLORS.open : session.winnerId ? COLORS.won : COLORS.none;
   const lines = rollLines(session);
-  const embed = itemEmbed(session.item, color).setDescription(
-    lines.length ? fit(lines, '\n', 4000) : '*Noch keine Würfe.*',
+  const head = panel ? `🧵 <#${session.threadId}> · von <@${session.ownerId}>\n\n` : '';
+  const embed = itemEmbed(session.item, color, { image: panel }).setDescription(
+    head + (lines.length ? fit(lines, '\n', 3900) : '*Noch keine Würfe.*'),
   );
 
   const passed = session.withStatus(Status.PASSED).map((id) => `<@${id}>`);
@@ -119,6 +164,8 @@ export function lootEmbed(session) {
     embed.setFooter({ text: 'Verlosung abgeschlossen' });
   } else if (session.closed) {
     embed.setFooter({ text: 'Ohne Gewinner geschlossen' });
+  } else if (panel) {
+    embed.setFooter({ text: `${c.total - c.pending}/${c.total} entschieden` });
   } else {
     embed.setFooter({
       text: `Würfel 1–${session.rollMax} · ${c.total - c.pending}/${c.total} entschieden · Nur ausgewählte Spieler können würfeln oder passen.`,
@@ -127,9 +174,10 @@ export function lootEmbed(session) {
   return embed;
 }
 
+/** Spieler-Bedienung im Thread: nur Würfeln und Passen. */
 export function lootComponents(session) {
   if (session.closed) return [];
-  const rows = [
+  return [
     new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`loot:roll:${session.id}`)
@@ -138,34 +186,8 @@ export function lootComponents(session) {
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`loot:pass:${session.id}`).setLabel('Passen').setEmoji('🚫').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId(`loot:close:${session.id}`)
-        .setLabel('Ohne Gewinner schließen')
-        .setStyle(ButtonStyle.Danger),
     ),
   ];
-  const rolls = session.rolls().slice(0, MAX_SELECT);
-  if (rolls.length) {
-    rows.push(
-      new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId(`loot:winner:${session.id}`)
-          .setPlaceholder('👑 Gewinner auswählen (nur Ersteller)')
-          .addOptions(
-            rolls.map((r) => {
-              const p = purposeById(r.purpose);
-              return {
-                label: `${session.nameOf(r.userId)} – ${r.roll}`.slice(0, 100),
-                description: p.label,
-                emoji: p.emoji,
-                value: r.userId,
-              };
-            }),
-          ),
-      ),
-    );
-  }
-  return rows;
 }
 
 export function lootPayload(session) {

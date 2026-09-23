@@ -4,29 +4,27 @@ Discord-Bot, der das Verteilen von Loot in **Throne and Liberty** einfacher mach
 
 ## Ablauf
 
+Es gibt zwei Kanäle: den **Loot-Kanal** (z. B. `#loot`, für alle) und den **Leader-Kanal** (z. B. `#loot-leitung`, nur für Leader).
+
 1. **Item posten:** Im Loot-Kanal postet jemand einen **Screenshot** oder einen **Questlog-Link** des Items.
-   Optional mit Text als Item-Name.
-2. **Bot fragt: „Wer darf rollen?“** Der Ersteller wählt Spieler oder Rollen aus einer **Liste** aus.
-   Alternativ schreibt er sie als `@Name` / `@Rolle` in den Kanal, direkt im Item-Post oder als Nachtrag.
-   Danach klickt er auf **🧵 Thread erstellen**.
-3. **Thread:** Der Bot erstellt am Item-Post einen Thread, zeigt dort das Item und pingt alle berechtigten Spieler an.
-   Bei einer Rolle wird jedes Mitglied einzeln angepingt.
-4. **Rollen oder passen:** Jeder Spieler wählt, **wofür** er rollt, und würfelt damit 1–100:
-   - ⭐ BiS-Item
-   - 💧 Watermark Upgrade
-   - 📜 Lithografie
-   - 💰 Verkauf
-   - ✨ Potential
+   Optional mit Text als Item-Name. Der Bot markiert den Post mit ⏳.
+2. **„Wer darf rollen?“ im Leader-Kanal:** Dort erscheint ein Panel. Der Ersteller wählt Spieler oder Rollen aus der **Liste**
+   oder schreibt sie als `@Name` / `@Rolle` in den Leader-Kanal.
+   `@Erwähnungen` im Item-Post werden direkt übernommen. Danach klickt er auf **🧵 Thread erstellen**.
+3. **Thread für die Spieler:** Der Bot erstellt am Item-Post einen Thread mit der Roll-Liste und pingt alle Ausgewählten an.
+   Bei einer Rolle wird jedes Mitglied einzeln angepingt. Die Spieler sehen dort nur **Würfeln** und **Passen**.
+4. **Rollen oder passen:** Nur ausgewählte Spieler wählen, **wofür** sie rollen, und würfeln damit 1–100:
+   ⭐ BiS-Item · 💧 Watermark Upgrade · 📜 Lithografie · 💰 Verkauf · ✨ Potential.
+   Oder sie klicken **🚫 Passen**.
+5. **Roll-Liste:** Die Würfe sind nach Grund gruppiert (BiS zuerst) und darin nach Höhe sortiert.
+   Die Liste steht im Thread und im Leader-Panel. Haben alle entschieden, pingt der Bot den Ersteller im Leader-Kanal an.
+6. **Leader-Panel** im Leader-Kanal:
+   - 👑 **Gewinner auswählen**: Der Bot verkündet den Gewinner im Thread und markiert den Item-Post mit 🏆.
+   - ➕ **Spieler oder Rollen hinzufügen**: Die Neuen werden im Thread angepingt.
+   - ↩️ **Entscheidung zurücksetzen**, z. B. nach einem Fehlklick. Der Spieler wird angepingt und kann neu wählen.
+   - **Ohne Gewinner schließen**.
 
-   Oder er klickt **🚫 Passen**. Jeder hat genau eine Entscheidung.
-5. **Roll-Liste:** Alle Würfe stehen in einer Liste, gruppiert nach Grund (BiS zuerst) und darin nach Höhe sortiert.
-   Dazu sieht man, wer gepasst hat und wer noch offen ist.
-   Haben alle entschieden, pingt der Bot den Ersteller an.
-6. **Gewinner:** Der Ersteller wählt den Gewinner aus der Liste der Spieler, die gewürfelt haben.
-   Der Bot verkündet ihn im Thread und vermerkt ihn im Loot-Kanal.
-   Alternativ: **Ohne Gewinner schließen**.
-
-Den Gewinner auswählen oder die Verlosung schließen darf **nur der Ersteller** und wer explizit in `LOOT_MANAGER_IDS` eingetragen ist (Nutzer- oder Rollen-IDs). Discord-Rechte wie *Nachrichten verwalten* oder *Administrator* reichen dafür nicht.
+Das Panel bedienen darf **nur der Ersteller** und wer explizit in `LOOT_MANAGER_IDS` eingetragen ist.
 
 ## Einrichtung
 
@@ -39,10 +37,11 @@ Voraussetzung: Node.js 22 oder neuer.
 3. Den Bot mit dem Scope `bot` einladen. Er braucht diese Rechte im Loot-Kanal:
    *Kanal ansehen*, *Nachrichten senden*, *Links einbetten*, *Nachrichtenverlauf lesen*, *Reaktionen hinzufügen*,
    *Öffentliche Threads erstellen*, *Nachrichten in Threads senden*.
-4. Einen Kanal für Loot anlegen (z. B. `#loot`) und seine ID kopieren (Entwicklermodus → Rechtsklick → *Kanal-ID kopieren*).
+4. Zwei Kanäle anlegen: `#loot` für alle und `#loot-leitung`, den nur Leader sehen. Beide IDs kopieren (Entwicklermodus → Rechtsklick → *Kanal-ID kopieren*).
+   Der Bot braucht in `#loot-leitung` *Kanal ansehen*, *Nachrichten senden*, *Links einbetten* und *Reaktionen hinzufügen*.
 5. Konfigurieren und starten:
    ```bash
-   cp .env.example .env   # DISCORD_TOKEN und LOOT_CHANNEL_IDS eintragen
+   cp .env.example .env   # DISCORD_TOKEN, LOOT_CHANNEL_IDS und LOOT_LEADER_CHANNEL_ID eintragen
    npm install
    npm start
    ```
@@ -53,6 +52,7 @@ Voraussetzung: Node.js 22 oder neuer.
 | --- | --- |
 | `DISCORD_TOKEN` | Bot-Token |
 | `LOOT_CHANNEL_IDS` | ID(s) der Loot-Kanäle, kommagetrennt |
+| `LOOT_LEADER_CHANNEL_ID` | ID des Leader-Kanals. Hier erscheinen „Wer darf rollen?“ und das Panel. Leer = im Loot-Kanal |
 | `LOOT_LEADER_ROLE_IDS` | Optional: nur diese Rollen (und Admins) dürfen Loot posten. Leer = jeder im Kanal |
 | `LOOT_MANAGER_IDS` | Optional: Nutzer- und/oder Rollen-IDs, die bei jeder Verlosung den Gewinner wählen oder schließen dürfen. Leer = nur der Ersteller |
 | `BOT_NAME` | Optional, Standard `Loot and Liberty` |
@@ -75,6 +75,6 @@ npm test
 
 ## Bekannte Grenzen und Ideen
 
-- Die Frage „Wer darf rollen?“ läuft nach 30 Minuten ab und überlebt keinen Neustart. Laufende Verlosungen im Thread bleiben erhalten.
-- Das Gewinner-Menü zeigt höchstens 25 Würfe (Discord-Limit), und zwar die obersten der Liste.
+- Die Frage „Wer darf rollen?“ läuft nach 30 Minuten ab und überlebt keinen Neustart. Laufende Verlosungen bleiben erhalten.
+- Gewinner- und Zurücksetzen-Menü zeigen höchstens 25 Einträge (Discord-Limit).
 - Geplant: mehrere Würfe pro Spieler und ein anderer Zahlenbereich. `LootSession` hat dafür schon `rollMax`.
