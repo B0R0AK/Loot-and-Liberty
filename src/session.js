@@ -45,6 +45,8 @@ export class LootSession {
     this.starterMessageId = rest.starterMessageId ?? null;
     this.endsAt = rest.endsAt ?? null;
     this.rollsLocked = rest.rollsLocked ?? false;
+    /** Wer diese Verlosung verwalten darf (zusätzlich zum Ersteller): Leader und/oder Leader-Rollen. */
+    this.managers = { users: [], roles: [], ...(rest.managers ?? {}) };
     this.panelChannelId = rest.panelChannelId ?? null;
     this.panelMessageId = rest.panelMessageId ?? null;
     this.sourceUrl = rest.sourceUrl ?? null;
@@ -54,6 +56,15 @@ export class LootSession {
     this.winnerId = null;
     this.participants = new Map(
       [...new Set(eligibleIds)].map((uid) => [uid, { status: Status.PENDING, roll: null, purpose: null, at: null }]),
+    );
+  }
+
+  /** Darf dieser Nutzer (mit diesen Rollen) die Verlosung verwalten? */
+  isManager(userId, roleIds = []) {
+    return (
+      userId === this.ownerId ||
+      this.managers.users.includes(userId) ||
+      roleIds.some((id) => this.managers.roles.includes(id))
     );
   }
 

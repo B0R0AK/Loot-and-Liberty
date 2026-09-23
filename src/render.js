@@ -41,16 +41,26 @@ function itemEmbed(item, color, { image = true } = {}) {
 
 // ---------- Leader-Kanal: "Wer darf rollen?" ----------
 
+/** Erwähnungen für { users, roles } – Rollen zuerst. */
+const mentionList = ({ users = [], roles = [] }) => [...roles.map((id) => `<@&${id}>`), ...users.map((id) => `<@${id}>`)];
+
+/** Ersteller + gewählte Verwalter als Erwähnungen. */
+export function managerMentions(ownerId, managers) {
+  return mentionList({ roles: managers.roles, users: [ownerId, ...managers.users.filter((id) => id !== ownerId)] });
+}
+
 export function promptView(draft) {
-  const { users, roles } = draft.selection;
-  const picked = [...roles.map((id) => `<@&${id}>`), ...users.map((id) => `<@${id}>`)];
+  const picked = mentionList(draft.selection);
   const embed = itemEmbed(draft.item, COLORS.prompt, { image: false })
     .setDescription(
       '### 👥 Wer darf rollen?\n' +
         'Wähle unten Spieler oder Rollen aus – oder schreib `@Name` / `@Rolle` hier in den Kanal.\n' +
         `-# Danach landet das Item in <#${draft.lootChannelId}> und alle Ausgewählten werden gepingt.`,
     )
-    .addFields({ name: `Ausgewählt${picked.length ? ` (${picked.length})` : ''}`, value: picked.length ? fit(picked, ' ') : '*noch niemand*' });
+    .addFields(
+      { name: `🎲 Darf rollen${picked.length ? ` (${picked.length})` : ''}`, value: picked.length ? fit(picked, ' ') : '*noch niemand*' },
+      { name: '👑 Verwaltet von', value: fit(managerMentions(draft.authorId, draft.managers), ' ') },
+    );
 
   return {
     content: '',
@@ -59,8 +69,15 @@ export function promptView(draft) {
       new ActionRowBuilder().addComponents(
         new MentionableSelectMenuBuilder()
           .setCustomId(`draft:select:${draft.id}`)
-          .setPlaceholder('Spieler oder Rollen auswählen …')
+          .setPlaceholder('🎲 Wer darf rollen? Spieler oder Rollen …')
           .setMinValues(1)
+          .setMaxValues(MAX_SELECT),
+      ),
+      new ActionRowBuilder().addComponents(
+        new MentionableSelectMenuBuilder()
+          .setCustomId(`draft:managers:${draft.id}`)
+          .setPlaceholder('👑 Wer verwaltet? Leader oder Leader-Rollen (optional) …')
+          .setMinValues(0)
           .setMaxValues(MAX_SELECT),
       ),
       new ActionRowBuilder().addComponents(
@@ -169,7 +186,7 @@ export function lootEmbed(session, { panel = false } = {}) {
   const color = session.winnerId ? COLORS.won : session.closed ? COLORS.none : session.rollsLocked ? COLORS.locked : COLORS.open;
 
   const head = [];
-  if (panel) head.push(`🧵 <#${session.threadId}> · gepostet von <@${session.ownerId}>`);
+  if (panel) head.push(`🧵 <#${session.threadId}> · 👑 ${managerMentions(session.ownerId, session.managers).join(' ')}`);
   if (session.winnerId) {
     const w = session.participants.get(session.winnerId);
     const p = purposeById(w.purpose);

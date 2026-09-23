@@ -11,7 +11,8 @@ Es gibt zwei Kanäle:
 1. **Leader postet das Item** im Leader-Kanal: einen **Screenshot** oder einen **Questlog-Link**, optional mit Text als Item-Name.
 2. **„Wer darf rollen?“** erscheint direkt darunter. Der Leader wählt Spieler oder Rollen aus der **Liste**
    oder schreibt sie als `@Name` / `@Rolle` in den Leader-Kanal. `@Erwähnungen` im Item-Post werden direkt übernommen.
-   Dann klickt er auf **📣 Posten & Spieler pingen**.
+   Im zweiten Feld legt er fest, **wer die Verlosung verwaltet**: einzelne Leader, eine oder mehrere Leader-Rollen oder beides.
+   Er selbst verwaltet immer mit. Dann klickt er auf **📣 Posten & Spieler pingen**.
 3. **Der Bot postet das Item mit Bild im Loot-Kanal** und öffnet daran einen **Thread** mit der Roll-Liste.
    Alle Ausgewählten werden im Thread angepingt. Bei einer Rolle wird jedes Mitglied einzeln angepingt.
 4. **Die Spieler haben 24 Stunden** (einstellbar). In der Zeit wählen sie, **wofür** sie rollen, und würfeln 1–100:
@@ -20,8 +21,8 @@ Es gibt zwei Kanäle:
 5. **Roll-Liste:** Die Würfe sind nach Grund gruppiert (BiS zuerst) und darin nach Höhe sortiert.
    Die Liste steht im Thread und im Leader-Panel.
 6. **Ende der Rollzeit:** nach 24 Stunden oder früher per **⏹️ Rollen jetzt beenden**.
-   Der Bot pingt dann den Leader im Leader-Kanal an.
-7. **Leader-Panel** im Leader-Kanal:
+   Der Bot pingt dann die Verwalter im Leader-Kanal an.
+7. **Leader-Panel** im Leader-Kanal, nur für die Verwalter dieser Verlosung:
    - 👑 **Gewinner auswählen**: Der Bot verkündet ihn im Thread und vermerkt ihn an der Item-Nachricht.
    - ➕ **Spieler oder Rollen hinzufügen** (während der Rollzeit).
    - ↩️ **Entscheidung zurücksetzen**, z. B. nach einem Fehlklick (während der Rollzeit).
@@ -31,8 +32,9 @@ Es gibt zwei Kanäle:
 
 | Wer | Darf |
 | --- | --- |
-| **Bot-Admins**: Server-Besitzer, Administratoren und `BOT_ADMIN_IDS` | Leader festlegen (`/leader`), Kanäle einrichten (`/einrichten`), alles, was Leader dürfen |
-| **Loot-Leader**: per `/leader hinzufügen` festgelegte Spieler oder Rollen | Items posten, auswählen, wer rollt, das Panel bedienen |
+| **Bot-Admins**: Server-Besitzer, Administratoren und `BOT_ADMIN_IDS` | Leader festlegen (`/leader`), Kanäle einrichten (`/einrichten`), alles, was Leader und Verwalter dürfen |
+| **Loot-Leader**: per `/leader hinzufügen` festgelegte Spieler oder Rollen | Items posten, auswählen, wer rollt und wer verwaltet |
+| **Verwalter einer Verlosung**: der Ersteller plus die beim Posten gewählten Leader oder Leader-Rollen | Das Panel dieser Verlosung bedienen |
 | **Ausgewählte Spieler** | Würfeln oder passen |
 
 ### Befehle

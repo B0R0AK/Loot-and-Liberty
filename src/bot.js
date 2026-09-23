@@ -43,6 +43,11 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
     return leaders.users.includes(userId) || roleIdsOf(member).some((id) => leaders.roles.includes(id));
   }
 
+  /** Verwalter dieser Verlosung (Ersteller, gewählte Leader/Rollen) oder Bot-Admin. */
+  function mayManage(interaction, session) {
+    return session.isManager(interaction.user.id, roleIdsOf(interaction.member)) || isBotAdmin(whoInteracts(interaction));
+  }
+
   const whoInteracts = (i) => ({ userId: i.user.id, guild: i.guild, permissions: i.memberPermissions, member: i.member });
   const whoWrote = (m) => ({ userId: m.author.id, guild: m.guild, permissions: m.member?.permissions, member: m.member });
 
@@ -105,6 +110,7 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
       lootChannelId: cfg.lootChannelId,
       item,
       selection: mentionsOf(message),
+      managers: { users: [], roles: [] },
       prompt: null,
     };
     drafts.set(draft.id, draft);
@@ -135,10 +141,20 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
     if (!draft) {
       return interaction.update({ content: '⌛ Abgelaufen – poste das Item einfach neu.', embeds: [], components: [] });
     }
-    if (!isLeader(whoInteracts(interaction))) return interaction.reply(ephemeral('Nur Loot-Leader können das.'));
+    if (interaction.user.id !== draft.authorId && !isBotAdmin(whoInteracts(interaction))) {
+      return interaction.reply(ephemeral(`Das kann nur <@${draft.authorId}> auswählen.`));
+    }
 
     if (action === 'select') {
       draft.selection = { roles: [...interaction.roles.keys()], users: [...interaction.users.keys()] };
+      return interaction.update(promptView(draft));
+    }
+
+    if (action === 'managers') {
+      draft.managers = {
+        roles: [...interaction.roles.keys()].filter((id) => id !== interaction.guildId),
+        users: [...interaction.users.values()].filter((u) => !u.bot && u.id !== draft.authorId).map((u) => u.id),
+      };
       return interaction.update(promptView(draft));
     }
 
@@ -171,6 +187,7 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
       item: draft.item,
       eligibleIds: [...members.keys()],
       names: namesOf(members),
+      managers: draft.managers,
       guildId: interaction.guildId,
       channelId: lootChannel.id,
       panelChannelId: interaction.channelId,
@@ -226,11 +243,18 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
     await render(session, { starter: true });
     const thread = await channel(session.threadId);
     await thread.send(reason === 'timeout' ? '⏰ **Die Rollzeit ist vorbei.** Der Leader wählt jetzt den Gewinner.' : '⏹️ **Der Leader hat das Rollen beendet.** Der Gewinner wird gleich gewählt.');
+    await notifyManagers(session, `⏹️ **${session.item.name}**: Rollen beendet – bitte Gewinner auswählen.`);
+  }
+
+  /** Hinweis im Leader-Kanal an alle Verwalter der Verlosung. */
+  async function notifyManagers(session, text) {
     const panel = await channel(session.panelChannelId);
+    const users = [session.ownerId, ...session.managers.users];
+    const who = [...session.managers.roles.map((id) => `<@&${id}>`), ...[...new Set(users)].map((id) => `<@${id}>`)].join(' ');
     await panel.send({
-      content: `⏹️ **${session.item.name}**: Rollen beendet. <@${session.ownerId}>, bitte wähle den Gewinner aus.`,
+      content: `${text} ${who}`,
       reply: { messageReference: session.panelMessageId, failIfNotExists: false },
-      allowedMentions: { users: [session.ownerId] },
+      allowedMentions: { users, roles: session.managers.roles },
     });
   }
 
@@ -286,12 +310,7 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
     store.save();
     await render(session);
     if (session.allDecided) {
-      const panel = await channel(session.panelChannelId);
-      await panel.send({
-        content: `✅ **${session.item.name}**: Alle haben entschieden. <@${session.ownerId}>, du kannst den Gewinner auswählen.`,
-        reply: { messageReference: session.panelMessageId, failIfNotExists: false },
-        allowedMentions: { users: [session.ownerId] },
-      });
+      await notifyManagers(session, `✅ **${session.item.name}**: Alle haben entschieden – der Gewinner kann ausgewählt werden.`);
     }
   }
 
@@ -337,7 +356,9 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
   async function handlePanel(interaction, action, id) {
     const session = store.get(id);
     if (!session) return interaction.reply(ephemeral('Diese Verlosung ist nicht mehr aktiv.'));
-    if (!isLeader(whoInteracts(interaction))) return interaction.reply(ephemeral('Nur Loot-Leader können das.'));
+    if (!mayManage(interaction, session)) {
+      return interaction.reply(ephemeral('Diese Verlosung verwalten nur die dafür ausgewählten Leader.'));
+    }
 
     if (action === 'winner') {
       const res = session.chooseWinner(interaction.values[0]);

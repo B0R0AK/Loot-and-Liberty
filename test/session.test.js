@@ -121,3 +121,17 @@ test('Fortschrittsbalken', async () => {
   assert.equal(progressBar(7, 7), '▰▰▰▰▰▰▰▰▰▰');
   assert.equal(progressBar(0, 0), '▱▱▱▱▱▱▱▱▱▱');
 });
+
+test('Verwalter: Ersteller, gewählte Leader und Leader-Rollen', () => {
+  const s = new LootSession({
+    id: 's', ownerId: 'owner', item: { name: 'X' }, eligibleIds: ['a'],
+    managers: { users: ['lead2'], roles: ['offiziere', 'raidlead'] },
+  });
+  assert.equal(s.isManager('owner'), true);
+  assert.equal(s.isManager('lead2'), true);
+  assert.equal(s.isManager('x', ['member', 'raidlead']), true);
+  assert.equal(s.isManager('x', ['member']), false);
+  const copy = LootSession.fromJSON(JSON.parse(JSON.stringify(s)));
+  assert.deepEqual(copy.managers, { users: ['lead2'], roles: ['offiziere', 'raidlead'] });
+  assert.equal(new LootSession({ id: 't', ownerId: 'o', item: {}, eligibleIds: ['a'] }).isManager('x', ['r']), false);
+});
