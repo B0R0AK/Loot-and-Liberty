@@ -46,3 +46,38 @@ test('Titel aus Questlog-ähnlichem HTML (Reihenfolge, Apostroph, Entities)', as
   assert.equal(cleanTitle('Questlog | Throne and Liberty Database'), null);
   assert.equal(cleanTitle('Sword-Of-Dawn | Questlog'), 'Sword-Of-Dawn');
 });
+
+test('Questlog-Link → Item-ID und Sprache', async () => {
+  const { questlogItemRef } = await import('../src/item.js');
+  assert.deepEqual(questlogItemRef('https://questlog.gg/throne-and-liberty/en/db/item/np_gem'), { language: 'en', id: 'np_gem' });
+  assert.deepEqual(questlogItemRef('https://www.questlog.gg/throne-and-liberty/de/db/item/sword_a_t1_construct_001?x=1'), {
+    language: 'de',
+    id: 'sword_a_t1_construct_001',
+  });
+  assert.equal(questlogItemRef('https://questlog.gg/throne-and-liberty/en/db/skills'), null);
+  assert.equal(questlogItemRef('https://example.com/item/1'), null);
+});
+
+test('Questlog-Name über die Daten-Schnittstelle (fetch gemockt)', async (t) => {
+  const { fetchLinkPreview } = await import('../src/item.js');
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    calls.push(String(url));
+    return new Response(JSON.stringify({ result: { data: { id: 'np_gem', name: 'Lucent', description: 'Währung' } } }), {
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  t.mock.method(console, 'log', () => {});
+  const preview = await fetchLinkPreview('https://questlog.gg/throne-and-liberty/en/db/item/np_gem');
+  assert.equal(preview.title, 'Lucent');
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].startsWith('https://questlog.gg/throne-and-liberty/api/trpc/database.getItem?input='));
+  assert.deepEqual(JSON.parse(decodeURIComponent(calls[0].split('input=')[1])), { language: 'en', id: 'np_gem' });
+});
+
+test('Questlog-Schnittstelle down → Fallback ohne Absturz', async (t) => {
+  const { fetchLinkPreview } = await import('../src/item.js');
+  t.mock.method(globalThis, 'fetch', async () => new Response('nope', { status: 500, headers: { 'content-type': 'text/plain' } }));
+  t.mock.method(console, 'warn', () => {});
+  assert.deepEqual(await fetchLinkPreview('https://questlog.gg/throne-and-liberty/en/db/item/np_gem'), {});
+});

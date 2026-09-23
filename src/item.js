@@ -64,11 +64,43 @@ export function extractPreview(html) {
   };
 }
 
+/** "https://questlog.gg/throne-and-liberty/en/db/item/np_gem" → { language: 'en', id: 'np_gem' } */
+export function questlogItemRef(url) {
+  const m = url?.match(/questlog\.gg\/throne-and-liberty\/([a-z]{2}(?:-[a-z]{2,4})?)\/db\/item\/([^/?#\s]+)/i);
+  return m ? { language: m[1].toLowerCase(), id: decodeURIComponent(m[2]) } : null;
+}
+
 /**
- * Holt Titel/Bild/Beschreibung eines Links (z. B. Questlog).
+ * Questlog-Seiten sind leer, bis der Browser sie per JavaScript füllt – der Name steht
+ * deshalb nicht im HTML. Questlog lädt die Daten über diese Schnittstelle nach.
+ */
+export async function fetchQuestlogItem({ language, id }, { timeoutMs = 6000 } = {}) {
+  const input = encodeURIComponent(JSON.stringify({ language, id }));
+  const url = `https://questlog.gg/throne-and-liberty/api/trpc/database.getItem?input=${input}`;
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(timeoutMs),
+    headers: { 'user-agent': 'Mozilla/5.0 (compatible; LootAndLibertyBot/1.0)', accept: 'application/json' },
+  });
+  if (!res.ok) throw new Error(`Questlog-API HTTP ${res.status}`);
+  const data = (await res.json())?.result?.data;
+  return { title: data?.name?.trim() || null, image: null, description: data?.description ?? null };
+}
+
+/**
+ * Holt Titel/Bild/Beschreibung eines Links (Questlog über die Daten-Schnittstelle, sonst HTML).
  * Schlägt still fehl – dann wird der Name aus dem Link genommen. Gründe landen im Log.
  */
 export async function fetchLinkPreview(url, { timeoutMs = 6000 } = {}) {
+  const ref = questlogItemRef(url);
+  if (ref) {
+    try {
+      const preview = await fetchQuestlogItem(ref, { timeoutMs });
+      console.log(`Questlog: ${ref.id} (${ref.language}) → ${preview.title ?? '(kein Name)'}`);
+      if (preview.title) return preview;
+    } catch (err) {
+      console.warn(`Questlog: ${ref.id} (${ref.language}) → ${err.message}`);
+    }
+  }
   try {
     const res = await fetch(url, {
       signal: AbortSignal.timeout(timeoutMs),
