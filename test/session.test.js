@@ -161,3 +161,31 @@ test('Nach dem Würfeln passen: Wurf zählt nicht mehr, erneut würfeln erst nac
   s.lockRolls();
   assert.equal(s.pass('b').reason, 'locked');
 });
+
+test('Ergebnis-Karte: Gewinner, Wurf, Grund, kleines Bild', async () => {
+  const { summaryEmbed } = await import('../src/render.js');
+  const s = make();
+  s.threadId = 't1';
+  s.roll('a', 'bis', () => 87);
+  s.pass('b');
+  s.chooseWinner('a');
+  const e = summaryEmbed(s, 'item.png').toJSON();
+  assert.equal(e.title, '🎁 Schwert');
+  assert.equal(e.thumbnail.url, 'attachment://item.png');
+  assert.match(e.description, /Gewinner:\*\* <@a>/);
+  assert.match(e.description, /\*\*87\*\* · ⭐ BiS-Item/);
+  assert.match(e.description, /1 gewürfelt · 1 gepasst · 🧵 <#t1>/);
+  assert.equal(e.image, undefined);
+
+  const n = make();
+  n.close('no-winner');
+  const e2 = summaryEmbed(n).toJSON();
+  assert.match(e2.description, /Ohne Gewinner/);
+  assert.equal(e2.thumbnail, undefined);
+});
+
+test('Hinweis-IDs werden gespeichert', () => {
+  const s = make();
+  s.noticeIds.push('n1');
+  assert.deepEqual(LootSession.fromJSON(JSON.parse(JSON.stringify(s))).noticeIds, ['n1']);
+});

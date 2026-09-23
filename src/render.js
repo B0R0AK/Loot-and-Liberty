@@ -287,6 +287,31 @@ export function starterContent(session) {
   return `## ${ITEM_ICON} ${item.name}\n${status}\n-# 👥 ${c.total} Spieler${link} · Würfeln & Passen im Thread ↓`;
 }
 
+/**
+ * Kompakte Ergebnis-Karte für den Leader-Kanal nach dem Abschluss:
+ * kleines Item-Bild, Gewinner mit Wurf und Grund, Link zum Thread.
+ */
+export function summaryEmbed(session, imageName = null) {
+  const c = session.counts();
+  const embed = new EmbedBuilder()
+    .setTitle(`${ITEM_ICON} ${session.item.name}`)
+    .setColor(session.winnerId ? COLORS.won : COLORS.none);
+  if (session.item.url) embed.setURL(session.item.url);
+  if (imageName) embed.setThumbnail(`attachment://${imageName}`);
+
+  let result = '✖️ **Ohne Gewinner geschlossen**';
+  if (session.winnerId) {
+    const w = session.participants.get(session.winnerId);
+    const p = purposeById(w.purpose);
+    result = `🏆 **Gewinner:** <@${session.winnerId}>\n🎲 **${w.roll}** · ${p.emoji} ${p.label}`;
+  }
+  embed.setDescription(
+    `${result}\n-# ${c.rolled} gewürfelt · ${c.passed} gepasst · 🧵 <#${session.threadId}> · 👑 <@${session.ownerId}>`,
+  );
+  embed.setTimestamp();
+  return embed;
+}
+
 /** Eingabefenster zum Umbenennen eines Items (scope: 'draft' oder 'panel'). */
 export function renameModal(scope, id, currentName) {
   return new ModalBuilder()

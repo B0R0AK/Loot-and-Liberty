@@ -49,6 +49,8 @@ export class LootSession {
     this.managers = { users: [], roles: [], ...(rest.managers ?? {}) };
     this.panelChannelId = rest.panelChannelId ?? null;
     this.panelMessageId = rest.panelMessageId ?? null;
+    /** Hinweise im Leader-Kanal („Rollen beendet“ …) – werden nach dem Abschluss aufgeräumt. */
+    this.noticeIds = rest.noticeIds ?? [];
     this.sourceUrl = rest.sourceUrl ?? null;
     this.createdAt = rest.createdAt ?? Date.now();
     this.closed = false;
