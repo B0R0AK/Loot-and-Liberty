@@ -189,3 +189,22 @@ test('Hinweis-IDs werden gespeichert', () => {
   s.noticeIds.push('n1');
   assert.deepEqual(LootSession.fromJSON(JSON.parse(JSON.stringify(s))).noticeIds, ['n1']);
 });
+
+test('Kleine Karte im Loot-Kanal: Rollzeit vorbei, dann Gewinner', async () => {
+  const { summaryEmbed } = await import('../src/render.js');
+  const s = make();
+  s.threadId = 't1';
+  s.roll('a', 'watermark', () => 64);
+  s.lockRolls();
+  const locked = summaryEmbed(s, 'item.png', { forLootChannel: true }).toJSON();
+  assert.match(locked.description, /Rollzeit vorbei/);
+  assert.equal(locked.thumbnail.url, 'attachment://item.png');
+  assert.doesNotMatch(locked.description, /<#t1>|👑/);
+  assert.equal(locked.timestamp, undefined);
+
+  s.chooseWinner('a');
+  const won = summaryEmbed(s, 'item.png', { forLootChannel: true }).toJSON();
+  assert.match(won.description, /Gewinner:\*\* <@a>\n🎲 \*\*64\*\* · 💧 Watermark Upgrade/);
+  assert.ok(won.timestamp);
+  assert.match(summaryEmbed(s).toJSON().description, /🧵 <#t1> · 👑 <@owner>/);
+});

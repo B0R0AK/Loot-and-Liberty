@@ -291,24 +291,27 @@ export function starterContent(session) {
  * Kompakte Ergebnis-Karte für den Leader-Kanal nach dem Abschluss:
  * kleines Item-Bild, Gewinner mit Wurf und Grund, Link zum Thread.
  */
-export function summaryEmbed(session, imageName = null) {
+export function summaryEmbed(session, imageName = null, { forLootChannel = false } = {}) {
   const c = session.counts();
-  const embed = new EmbedBuilder()
-    .setTitle(`${ITEM_ICON} ${session.item.name}`)
-    .setColor(session.winnerId ? COLORS.won : COLORS.none);
+  const color = session.winnerId ? COLORS.won : session.closed ? COLORS.none : COLORS.locked;
+  const embed = new EmbedBuilder().setTitle(`${ITEM_ICON} ${session.item.name}`).setColor(color);
   if (session.item.url) embed.setURL(session.item.url);
   if (imageName) embed.setThumbnail(`attachment://${imageName}`);
 
-  let result = '✖️ **Ohne Gewinner geschlossen**';
+  let result;
   if (session.winnerId) {
     const w = session.participants.get(session.winnerId);
     const p = purposeById(w.purpose);
     result = `🏆 **Gewinner:** <@${session.winnerId}>\n🎲 **${w.roll}** · ${p.emoji} ${p.label}`;
+  } else if (session.closed) {
+    result = '✖️ **Ohne Gewinner geschlossen**';
+  } else {
+    result = '⏹️ **Rollzeit vorbei**\nDer Gewinner wird gerade gewählt.';
   }
-  embed.setDescription(
-    `${result}\n-# ${c.rolled} gewürfelt · ${c.passed} gepasst · 🧵 <#${session.threadId}> · 👑 <@${session.ownerId}>`,
-  );
-  embed.setTimestamp();
+  // Im Loot-Kanal hängt der Thread direkt darunter – dort reicht die Statistik.
+  const extra = forLootChannel ? '' : ` · 🧵 <#${session.threadId}> · 👑 <@${session.ownerId}>`;
+  embed.setDescription(`${result}\n-# ${c.rolled} gewürfelt · ${c.passed} gepasst${extra}`);
+  if (session.closed) embed.setTimestamp();
   return embed;
 }
 
