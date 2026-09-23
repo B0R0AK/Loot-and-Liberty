@@ -1,19 +1,38 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { ChannelType, SlashCommandBuilder } from 'discord.js';
 
-export const lootCommand = new SlashCommandBuilder()
-  .setName('loot')
-  .setDescription('Ein Item zur Verlosung posten')
+export const leaderCommand = new SlashCommandBuilder()
+  .setName('leader')
+  .setDescription('Loot-Leader verwalten (nur Bot-Admins)')
   .setDMPermission(false)
-  .addStringOption((o) =>
-    o
-      .setName('item')
-      .setDescription('Item-Name und/oder Questlog-Link')
-      .setRequired(true)
-      .setMaxLength(300),
+  .addSubcommand((s) =>
+    s
+      .setName('hinzufügen')
+      .setDescription('Spieler oder Rolle zum Loot-Leader machen')
+      .addMentionableOption((o) => o.setName('wer').setDescription('Spieler oder Rolle').setRequired(true)),
   )
-  .addAttachmentOption((o) => o.setName('bild').setDescription('Screenshot des Items (optional)'))
-  .addIntegerOption((o) =>
-    o.setName('dauer').setDescription('Dauer in Minuten (Standard: 10)').setMinValue(1).setMaxValue(1440),
+  .addSubcommand((s) =>
+    s
+      .setName('entfernen')
+      .setDescription('Loot-Leader-Rechte entziehen')
+      .addMentionableOption((o) => o.setName('wer').setDescription('Spieler oder Rolle').setRequired(true)),
+  )
+  .addSubcommand((s) => s.setName('liste').setDescription('Alle Loot-Leader anzeigen'));
+
+export const setupCommand = new SlashCommandBuilder()
+  .setName('einrichten')
+  .setDescription('Kanäle für Loot and Liberty festlegen (nur Bot-Admins)')
+  .setDMPermission(false)
+  .addChannelOption((o) =>
+    o
+      .setName('leaderkanal')
+      .setDescription('Hier posten Leader Items und wählen aus, wer rollen darf')
+      .addChannelTypes(ChannelType.GuildText),
+  )
+  .addChannelOption((o) =>
+    o
+      .setName('lootkanal')
+      .setDescription('Hierhin postet der Bot das Item mit Thread für die Spieler')
+      .addChannelTypes(ChannelType.GuildText),
   );
 
-export const commands = [lootCommand];
+export const commands = [leaderCommand, setupCommand];

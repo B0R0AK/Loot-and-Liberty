@@ -1,308 +1,502 @@
-import {
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  EmbedBuilder,
-  MentionableSelectMenuBuilder,
-  MessageFlags,
-  PermissionFlagsBits,
-} from 'discord.js';
-import { fetchLinkPreview, parseItemInput } from './item.js';
-import { messagePayload, mentionContent } from './render.js';
-import { LootSession } from './session.js';
+import { MessageFlags, PermissionFlagsBits } from 'discord.js';
+import { commands } from './commands.js';
+import { detectItem, fetchLinkPreview } from './item.js';
+import { lootPayload, panelView, pingChunks, promptView, starterContent } from './render.js';
+import { LootSession, purposeById } from './session.js';
 
-const DRAFT_TTL_MS = 15 * 60_000;
-const KEEP_CLOSED_MS = 60 * 60_000;
-const MAX_SELECT = 25;
+const DRAFT_TTL_MS = 30 * 60_000;
+const HOUR = 3_600_000;
 
-export function createLootBot({ leaderRoleIds = [], defaultMinutes = 10 } = {}) {
-  /** Entwürfe aus /loot, bis der Leader Teilnehmer gewählt und gepostet hat. */
+/**
+ * Ablauf:
+ *  1. Leader postet Screenshot/Questlog-Link im Leader-Kanal → darunter „Wer darf rollen?“
+ *  2. Leader wählt aus → Bot postet das Item mit Bild im Loot-Kanal, Thread mit Roll-Liste, Pings
+ *  3. Spieler würfeln/passen – bis die Rollzeit (24 h) abläuft oder der Leader früher beendet
+ *  4. Leader wählt im Panel (Leader-Kanal) den Gewinner
+ */
+export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 }) {
+  /** Gepostete Items, für die noch ausgewählt wird, wer rollen darf. Key = ID des Leader-Posts. */
   const drafts = new Map();
-  /** Laufende (und kürzlich beendete) Verlosungen. */
-  const sessions = new Map();
+  /** Serialisierte Edits pro Nachricht, damit immer der neueste Stand zuletzt ankommt. */
+  const editChains = new Map();
+  /** Timer für das Ende der Rollzeit. */
+  const timers = new Map();
 
-  function isLeader(interaction) {
-    if (leaderRoleIds.length) {
-      const roles = interaction.member?.roles;
-      const ids = Array.isArray(roles) ? roles : [...(roles?.cache?.keys() ?? [])];
-      if (ids.some((id) => leaderRoleIds.includes(id))) return true;
-    }
-    if (interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) return true;
-    return !leaderRoleIds.length && Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages));
+  const ephemeral = (content) => ({ content, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
+
+  // ---------- Rechte ----------
+
+  const roleIdsOf = (member) => {
+    const roles = member?.roles;
+    return Array.isArray(roles) ? roles : [...(roles?.cache?.keys() ?? [])];
+  };
+
+  /** Bot-Admin: Server-Besitzer, Discord-Administrator oder in BOT_ADMIN_IDS. Darf Leader festlegen. */
+  function isBotAdmin({ userId, guild, permissions }) {
+    return botAdminIds.includes(userId) || guild?.ownerId === userId || Boolean(permissions?.has(PermissionFlagsBits.Administrator));
   }
 
-  const ephemeral = (content, extra = {}) => ({ content, flags: MessageFlags.Ephemeral, ...extra });
+  /** Leader: per /leader festgelegte Nutzer oder Rollen (plus Bot-Admins). */
+  function isLeader({ userId, guild, permissions, member }) {
+    if (isBotAdmin({ userId, guild, permissions })) return true;
+    const { leaders } = store.guild(guild.id);
+    return leaders.users.includes(userId) || roleIdsOf(member).some((id) => leaders.roles.includes(id));
+  }
 
-  // ---------- Setup: /loot ----------
+  /** Verwalter dieser Verlosung (Ersteller, gewählte Leader/Rollen) oder Bot-Admin. */
+  function mayManage(interaction, session) {
+    return session.isManager(interaction.user.id, roleIdsOf(interaction.member)) || isBotAdmin(whoInteracts(interaction));
+  }
 
-  function setupView(draft) {
-    const { users, roles } = draft.selection;
-    const picked = [...roles.map((id) => `<@&${id}>`), ...users.map((id) => `<@${id}>`)];
-    const embed = new EmbedBuilder()
-      .setTitle(`💰 ${draft.item.name}`)
-      .setColor(0x5865f2)
-      .setDescription(
-        picked.length
-          ? `**Berechtigt:** ${picked.join(', ')}`
-          : 'Wähle unten Spieler und/oder Rollen aus, die auf das Item würfeln dürfen.',
-      )
-      .addFields({ name: 'Dauer', value: `${draft.minutes} Min.`, inline: true });
-    if (draft.item.url) embed.setURL(draft.item.url);
-    if (draft.item.image) embed.setImage(draft.item.image);
+  const whoInteracts = (i) => ({ userId: i.user.id, guild: i.guild, permissions: i.memberPermissions, member: i.member });
+  const whoWrote = (m) => ({ userId: m.author.id, guild: m.guild, permissions: m.member?.permissions, member: m.member });
 
+  // ---------- Hilfen ----------
+
+  function mentionsOf(message) {
     return {
-      embeds: [embed],
-      components: [
-        new ActionRowBuilder().addComponents(
-          new MentionableSelectMenuBuilder()
-            .setCustomId(`setup:select:${draft.id}`)
-            .setPlaceholder('Spieler oder Rollen auswählen …')
-            .setMinValues(1)
-            .setMaxValues(MAX_SELECT),
-        ),
-        new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`setup:post:${draft.id}`)
-            .setLabel('Posten')
-            .setEmoji('📣')
-            .setStyle(ButtonStyle.Success)
-            .setDisabled(!picked.length),
-          new ButtonBuilder().setCustomId(`setup:cancel:${draft.id}`).setLabel('Abbrechen').setStyle(ButtonStyle.Secondary),
-        ),
-      ],
+      users: [...message.mentions.parsedUsers.values()].filter((u) => !u.bot).map((u) => u.id),
+      roles: [...message.mentions.roles.keys()],
     };
   }
 
-  async function handleLootCommand(interaction) {
-    if (!isLeader(interaction)) {
-      return interaction.reply(ephemeral('Nur Leader dürfen Loot verteilen.'));
-    }
-    const attachment = interaction.options.getAttachment('bild');
-    if (attachment && !attachment.contentType?.startsWith('image/')) {
-      return interaction.reply(ephemeral('Der Anhang muss ein Bild sein (Screenshot des Items).'));
-    }
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const union = (a, b) => [...new Set([...a, ...b])].slice(0, 100);
 
-    const parsed = parseItemInput(interaction.options.getString('item', true));
-    const preview = parsed.url ? await fetchLinkPreview(parsed.url) : {};
-    const item = {
-      name: (parsed.nameFromInput ? parsed.name : preview.title || parsed.name).slice(0, 200),
-      url: parsed.url,
-      image: attachment?.url ?? preview.image ?? null,
-    };
-
-    const draft = {
-      id: interaction.id,
-      leaderId: interaction.user.id,
-      channelId: interaction.channelId,
-      item,
-      minutes: interaction.options.getInteger('dauer') ?? defaultMinutes,
-      selection: { users: [], roles: [] },
-    };
-    drafts.set(draft.id, draft);
-    setTimeout(() => drafts.delete(draft.id), DRAFT_TTL_MS).unref();
-
-    await interaction.editReply(setupView(draft));
-  }
-
-  function getDraft(interaction, id) {
-    const draft = drafts.get(id);
-    if (!draft || draft.leaderId !== interaction.user.id) return null;
-    return draft;
-  }
-
-  async function handleSetupSelect(interaction, id) {
-    const draft = getDraft(interaction, id);
-    if (!draft) return interaction.update({ content: 'Dieser Entwurf ist abgelaufen. Starte neu mit `/loot`.', embeds: [], components: [] });
-    draft.selection = {
-      roles: [...interaction.roles.keys()],
-      users: [...interaction.users.keys()],
-    };
-    await interaction.update(setupView(draft));
-  }
-
-  async function resolveEligible(guild, { users, roles }) {
-    const ids = new Set();
+  async function resolveMembers(guild, { users, roles }) {
+    const members = new Map();
     if (roles.length) {
-      const members = await guild.members.fetch();
-      for (const m of members.values()) {
-        if (m.user.bot) continue;
-        if (roles.includes(guild.id) || roles.some((r) => m.roles.cache.has(r))) ids.add(m.id);
+      for (const m of (await guild.members.fetch()).values()) {
+        if (!m.user.bot && (roles.includes(guild.id) || roles.some((r) => m.roles.cache.has(r)))) members.set(m.id, m);
       }
     }
     if (users.length) {
-      const members = await guild.members.fetch({ user: users });
-      for (const m of members.values()) if (!m.user.bot) ids.add(m.id);
+      for (const m of (await guild.members.fetch({ user: users })).values()) if (!m.user.bot) members.set(m.id, m);
     }
-    return [...ids];
+    return members;
   }
 
-  async function handleSetupPost(interaction, id) {
-    const draft = getDraft(interaction, id);
-    if (!draft) return interaction.update({ content: 'Dieser Entwurf ist abgelaufen. Starte neu mit `/loot`.', embeds: [], components: [] });
-    await interaction.deferUpdate();
+  const namesOf = (members) => Object.fromEntries([...members.values()].map((m) => [m.id, m.displayName]));
+  const channel = (id) => client.channels.fetch(id);
 
-    const eligible = await resolveEligible(interaction.guild, draft.selection);
-    if (!eligible.length) {
-      return interaction.editReply({ content: '⚠️ Die Auswahl enthält keine (menschlichen) Mitglieder.', ...setupView(draft) });
+  // ---------- 1. Item im Leader-Kanal erkennen ----------
+
+  async function onMessage(message) {
+    if (message.author.bot || !message.guild) return;
+    const cfg = store.guild(message.guild.id);
+    if (!cfg.leaderChannelId || message.channelId !== cfg.leaderChannelId) return;
+
+    const item = detectItem({
+      content: message.content,
+      attachments: [...message.attachments.values()].map((a) => ({ url: a.url, contentType: a.contentType })),
+    });
+    if (!item) return addMentionsToDraft(message);
+
+    if (!isLeader(whoWrote(message))) {
+      return message.reply({ content: 'Nur Loot-Leader können Items verlosen. Ein Bot-Admin kann dich mit `/leader hinzufügen` freischalten.', allowedMentions: { parse: [] } });
     }
-    drafts.delete(id);
+    if (!cfg.lootChannelId) {
+      return message.reply('Es ist noch kein Loot-Kanal eingerichtet. Ein Bot-Admin kann das mit `/einrichten lootkanal:#kanal` tun.');
+    }
 
-    const session = await startSession({
-      channel: interaction.channel ?? (await interaction.client.channels.fetch(draft.channelId)),
-      leaderId: draft.leaderId,
-      item: draft.item,
-      eligibleIds: eligible,
-      minutes: draft.minutes,
-      mentionRoleIds: draft.selection.roles,
-      mentionUserIds: draft.selection.users,
-    });
-    await interaction.editReply({
-      content: `✅ Verlosung gepostet: ${session.url} (${eligible.length} Teilnehmer)`,
-      embeds: [],
-      components: [],
-    });
-  }
+    if (item.url && (!item.nameFromInput || !item.image)) {
+      const preview = await fetchLinkPreview(item.url);
+      if (!item.nameFromInput && preview.title) item.name = preview.title.slice(0, 90);
+      item.image ??= preview.image ?? null;
+    }
 
-  async function handleSetupCancel(interaction, id) {
-    drafts.delete(id);
-    await interaction.update({ content: 'Abgebrochen.', embeds: [], components: [] });
-  }
-
-  // ---------- Laufende Verlosung ----------
-
-  async function startSession({ channel, leaderId, item, eligibleIds, minutes, mentionRoleIds, mentionUserIds, prefix = '' }) {
-    const session = new LootSession({
-      id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
-      leaderId,
+    const draft = {
+      id: message.id,
+      authorId: message.author.id,
+      lootChannelId: cfg.lootChannelId,
       item,
-      eligibleIds,
-      endsAt: Date.now() + minutes * 60_000,
-      mentionRoleIds,
-      mentionUserIds,
-    });
-    session.minutes = minutes;
-    session.channel = channel;
-    session.renderChain = Promise.resolve();
+      selection: mentionsOf(message),
+      managers: { users: [], roles: [] },
+      prompt: null,
+    };
+    drafts.set(draft.id, draft);
+    draft.prompt = await message.reply({ ...promptView(draft), allowedMentions: { parse: [] } });
 
-    const message = await channel.send({
-      content: mentionContent(session, prefix),
-      allowedMentions: { roles: mentionRoleIds.filter((r) => r !== channel.guild.id), users: mentionUserIds, parse: mentionRoleIds.includes(channel.guild.id) ? ['everyone'] : [] },
-      ...messagePayload(session),
-    });
-    session.messageId = message.id;
-    session.url = message.url;
-    sessions.set(session.id, session);
-    session.timer = setTimeout(() => finish(session, 'timeout').catch(console.error), minutes * 60_000);
-    return session;
+    setTimeout(async () => {
+      if (drafts.get(draft.id) !== draft) return;
+      drafts.delete(draft.id);
+      await draft.prompt.edit({ content: '⌛ Abgelaufen – poste das Item einfach neu.', embeds: [], components: [] }).catch(() => {});
+    }, DRAFT_TTL_MS).unref();
   }
 
-  /** Nachricht neu rendern – serialisiert, damit immer der neueste Stand zuletzt ankommt. */
-  function render(session) {
-    session.renderChain = session.renderChain
-      .then(() => session.channel.messages.edit(session.messageId, messagePayload(session)))
-      .catch((err) => console.error(`Konnte Verlosung ${session.id} nicht aktualisieren:`, err.message));
-    return session.renderChain;
+  /** Nachtrag „@Name @Rolle“ im Leader-Kanal für das offene Item desselben Leaders. */
+  async function addMentionsToDraft(message) {
+    const m = mentionsOf(message);
+    if (!m.users.length && !m.roles.length) return;
+    const draft = [...drafts.values()].reverse().find((d) => d.authorId === message.author.id && d.prompt?.channelId === message.channelId);
+    if (!draft) return;
+    draft.selection = { users: union(draft.selection.users, m.users), roles: union(draft.selection.roles, m.roles) };
+    await draft.prompt.edit(promptView(draft)).catch((err) => console.error('Update fehlgeschlagen:', err.message));
+    await message.react('✅').catch(() => {});
   }
 
-  async function finish(session, reason) {
-    if (!session.close(reason)) return;
-    clearTimeout(session.timer);
-    await render(session);
+  // ---------- 2. Auswahl, wer rollen darf ----------
 
-    const { top, winners, tie } = session.result();
-    if (winners.length && !tie) {
-      await session.channel
-        .send({
-          content: `🏆 <@${winners[0]}> gewinnt **${session.item.name}** mit einer **${top}**!`,
-          reply: { messageReference: session.messageId, failIfNotExists: false },
-          allowedMentions: { users: [winners[0]] },
-        })
-        .catch((err) => console.error('Gewinner-Nachricht fehlgeschlagen:', err.message));
+  async function handleDraft(interaction, action, id) {
+    const draft = drafts.get(id);
+    if (!draft) {
+      return interaction.update({ content: '⌛ Abgelaufen – poste das Item einfach neu.', embeds: [], components: [] });
     }
-    setTimeout(() => sessions.delete(session.id), tie ? KEEP_CLOSED_MS : 0).unref();
+    if (interaction.user.id !== draft.authorId && !isBotAdmin(whoInteracts(interaction))) {
+      return interaction.reply(ephemeral(`Das kann nur <@${draft.authorId}> auswählen.`));
+    }
+
+    if (action === 'select') {
+      draft.selection = { roles: [...interaction.roles.keys()], users: [...interaction.users.keys()] };
+      return interaction.update(promptView(draft));
+    }
+
+    if (action === 'managers') {
+      draft.managers = {
+        roles: [...interaction.roles.keys()].filter((id) => id !== interaction.guildId),
+        users: [...interaction.users.values()].filter((u) => !u.bot && u.id !== draft.authorId).map((u) => u.id),
+      };
+      return interaction.update(promptView(draft));
+    }
+
+    if (action === 'cancel') {
+      drafts.delete(id);
+      return interaction.update({ content: `Abgebrochen: **${draft.item.name}**`, embeds: [], components: [] });
+    }
+
+    if (action === 'start') {
+      await interaction.deferUpdate();
+      const members = await resolveMembers(interaction.guild, draft.selection);
+      if (!members.size) return interaction.followUp(ephemeral('⚠️ In der Auswahl sind keine (menschlichen) Mitglieder.'));
+      drafts.delete(id);
+      await startLoot(interaction, draft, members);
+    }
+  }
+
+  // ---------- 3. Item im Loot-Kanal posten, Thread, Pings ----------
+
+  function imageFile(url) {
+    const ext = url.split('?')[0].match(/\.(png|jpe?g|gif|webp)$/i)?.[1] ?? 'png';
+    return { attachment: url, name: `item.${ext.toLowerCase()}` };
+  }
+
+  async function startLoot(interaction, draft, members) {
+    const lootChannel = await channel(draft.lootChannelId);
+    const session = new LootSession({
+      id: draft.id,
+      ownerId: draft.authorId,
+      item: draft.item,
+      eligibleIds: [...members.keys()],
+      names: namesOf(members),
+      managers: draft.managers,
+      guildId: interaction.guildId,
+      channelId: lootChannel.id,
+      panelChannelId: interaction.channelId,
+      panelMessageId: interaction.message.id,
+      endsAt: Date.now() + rollHours * HOUR,
+    });
+
+    // Das Bild wird neu hochgeladen, damit es dauerhaft sichtbar bleibt.
+    const base = { content: starterContent(session), allowedMentions: { parse: [] } };
+    const starter = draft.item.image
+      ? await lootChannel.send({ ...base, files: [imageFile(draft.item.image)] }).catch(() => lootChannel.send(base))
+      : await lootChannel.send(base);
+    const thread = await starter.startThread({ name: `🎲 ${draft.item.name}`.slice(0, 100), autoArchiveDuration: 4320 });
+
+    session.starterMessageId = starter.id;
+    session.threadId = thread.id;
+    const main = await thread.send(lootPayload(session));
+    session.messageId = main.id;
+    store.set(session);
+    scheduleLock(session);
+
+    await pingPlayers(thread, [...members.keys()], `🔔 **${session.item.name}** – ihr seid dran! Wählt oben, wofür ihr rollt, oder passt. `);
+    await interaction.editReply(panelView(session));
+  }
+
+  async function pingPlayers(thread, ids, prefix) {
+    for (const content of pingChunks(ids, prefix)) {
+      await thread.send({ content, allowedMentions: { users: ids } });
+    }
+  }
+
+  // ---------- Rollzeit ----------
+
+  function scheduleLock(session) {
+    clearTimeout(timers.get(session.id));
+    if (!session.rollingOpen || !session.endsAt) return;
+    const delay = Math.max(0, session.endsAt - Date.now());
+    timers.set(
+      session.id,
+      setTimeout(() => lockRolls(session, 'timeout').catch((err) => console.error('Rollzeit-Ende fehlgeschlagen:', err)), delay),
+    );
+  }
+
+  /** Nach einem Neustart die Timer der offenen Verlosungen wieder starten. */
+  function restoreTimers() {
+    for (const session of store.sessions.values()) scheduleLock(session);
+  }
+
+  async function lockRolls(session, reason) {
+    if (!session.lockRolls()) return;
+    clearTimeout(timers.get(session.id));
+    store.save();
+    await render(session, { starter: true });
+    const thread = await channel(session.threadId);
+    await thread.send(reason === 'timeout' ? '⏰ **Die Rollzeit ist vorbei.** Der Leader wählt jetzt den Gewinner.' : '⏹️ **Der Leader hat das Rollen beendet.** Der Gewinner wird gleich gewählt.');
+    await notifyManagers(session, `⏹️ **${session.item.name}**: Rollen beendet – bitte Gewinner auswählen.`);
+  }
+
+  /** Hinweis im Leader-Kanal an alle Verwalter der Verlosung. */
+  async function notifyManagers(session, text) {
+    const panel = await channel(session.panelChannelId);
+    const users = [session.ownerId, ...session.managers.users];
+    const who = [...session.managers.roles.map((id) => `<@&${id}>`), ...[...new Set(users)].map((id) => `<@${id}>`)].join(' ');
+    await panel.send({
+      content: `${text} ${who}`,
+      reply: { messageReference: session.panelMessageId, failIfNotExists: false },
+      allowedMentions: { users, roles: session.managers.roles },
+    });
+  }
+
+  // ---------- Darstellung ----------
+
+  function queueEdit(key, fn) {
+    const next = (editChains.get(key) ?? Promise.resolve())
+      .then(fn)
+      .catch((err) => console.error(`Aktualisierung fehlgeschlagen (${key}):`, err.message));
+    editChains.set(key, next);
+    return next;
+  }
+
+  /** Roll-Liste im Thread, Leader-Panel und (bei Statuswechsel) die Item-Nachricht neu zeichnen. */
+  function render(session, { starter = false } = {}) {
+    const jobs = [
+      queueEdit(`thread:${session.id}`, async () => (await channel(session.threadId)).messages.edit(session.messageId, lootPayload(session))),
+      queueEdit(`panel:${session.id}`, async () => (await channel(session.panelChannelId)).messages.edit(session.panelMessageId, panelView(session))),
+    ];
+    if (starter) {
+      jobs.push(
+        queueEdit(`starter:${session.id}`, async () =>
+          (await channel(session.channelId)).messages.edit(session.starterMessageId, {
+            content: starterContent(session),
+            allowedMentions: { parse: [] },
+          }),
+        ),
+      );
+    }
+    return Promise.all(jobs);
   }
 
   const REASON_TEXT = {
     closed: 'Diese Verlosung ist bereits beendet.',
-    'not-eligible': 'Du bist für dieses Item nicht eingetragen.',
+    locked: 'Die Rollzeit ist vorbei.',
+    'not-eligible': 'Du wurdest für dieses Item nicht ausgewählt und kannst nicht würfeln.',
+    'bad-purpose': 'Unbekannte Auswahl.',
+    'not-rolled': 'Dieser Spieler hat nicht gewürfelt.',
+    'still-pending': 'Dieser Spieler hat noch nichts entschieden.',
   };
 
-  async function handleDecision(interaction, session, action) {
-    const res = action === 'roll' ? session.roll(interaction.user.id) : session.pass(interaction.user.id);
-    if (!res.ok) {
-      const text =
-        res.reason === 'already'
-          ? res.participant.status === 'rolled'
-            ? `Du hast bereits gewürfelt: **${res.participant.roll}**.`
-            : 'Du hast bereits gepasst.'
-          : REASON_TEXT[res.reason];
-      return interaction.reply(ephemeral(text));
-    }
-    await interaction.deferUpdate();
-    if (session.allDecided) await finish(session, 'complete');
-    else await render(session);
+  function failText(res) {
+    if (res.reason !== 'already') return REASON_TEXT[res.reason] ?? 'Das geht gerade nicht.';
+    const p = res.participant;
+    return p.status === 'rolled'
+      ? `Du hast bereits gewürfelt: **${p.roll}** (${purposeById(p.purpose)?.label}).`
+      : 'Du hast bereits gepasst.';
   }
 
-  async function handleLootButton(interaction, action, id) {
-    const session = sessions.get(id);
-    if (!session) {
-      return interaction.reply(ephemeral('Diese Verlosung ist nicht mehr aktiv (beendet oder Bot wurde neu gestartet).'));
+  // ---------- 4. Spieler: Würfeln und Passen (Thread) ----------
+
+  async function afterDecision(session) {
+    store.save();
+    await render(session);
+    if (session.allDecided) {
+      await notifyManagers(session, `✅ **${session.item.name}**: Alle haben entschieden – der Gewinner kann ausgewählt werden.`);
+    }
+  }
+
+  async function handleLoot(interaction, action, id) {
+    const session = store.get(id);
+    if (!session) return interaction.reply(ephemeral('Diese Verlosung ist nicht mehr aktiv.'));
+
+    if (action === 'roll') {
+      const purpose = interaction.values[0];
+      const res = session.roll(interaction.user.id, purpose);
+      if (!res.ok) return interaction.reply(ephemeral(failText(res)));
+      await interaction.reply(ephemeral(`🎲 Du hast **${res.value}** gewürfelt (${purposeById(purpose).label}).`));
+      return afterDecision(session);
     }
 
-    if (action === 'roll' || action === 'pass') return handleDecision(interaction, session, action);
-
-    if (interaction.user.id !== session.leaderId && !isLeader(interaction)) {
-      return interaction.reply(ephemeral('Nur der Leader kann das.'));
+    if (action === 'pass') {
+      const res = session.pass(interaction.user.id);
+      if (!res.ok) return interaction.reply(ephemeral(failText(res)));
+      await interaction.reply(ephemeral('🚫 Du hast gepasst.'));
+      return afterDecision(session);
     }
+  }
 
-    if (action === 'end') {
-      await interaction.deferUpdate();
-      return finish(session, 'ended');
-    }
+  // ---------- 5. Leader-Panel ----------
 
-    if (action === 'tiebreak') {
-      const { winners, tie } = session.result();
-      if (!tie || session.tiebreakStarted) return interaction.reply(ephemeral('Hier gibt es kein offenes Stechen.'));
-      session.tiebreakStarted = true;
-      sessions.delete(session.id);
-      await interaction.deferUpdate();
-      await render(session);
-      await startSession({
-        channel: session.channel,
-        leaderId: session.leaderId,
-        item: session.item,
-        eligibleIds: winners,
-        minutes: session.minutes,
-        mentionRoleIds: [],
-        mentionUserIds: winners,
-        prefix: '⚖️ **Stechen!** ',
+  async function finish(interaction, session) {
+    clearTimeout(timers.get(session.id));
+    store.delete(session.id);
+    await interaction.deferUpdate();
+    await render(session, { starter: true });
+    const thread = await channel(session.threadId);
+    if (session.winnerId) {
+      const p = session.participants.get(session.winnerId);
+      await thread.send({
+        content: `🏆 Glückwunsch <@${session.winnerId}>! **${session.item.name}** gehört dir (Roll **${p.roll}** · ${purposeById(p.purpose)?.emoji} ${purposeById(p.purpose)?.label}).`,
+        allowedMentions: { users: [session.winnerId] },
       });
+    } else {
+      await thread.send('Verlosung ohne Gewinner geschlossen.');
     }
+  }
+
+  async function handlePanel(interaction, action, id) {
+    const session = store.get(id);
+    if (!session) return interaction.reply(ephemeral('Diese Verlosung ist nicht mehr aktiv.'));
+    if (!mayManage(interaction, session)) {
+      return interaction.reply(ephemeral('Diese Verlosung verwalten nur die dafür ausgewählten Leader.'));
+    }
+
+    if (action === 'winner') {
+      const res = session.chooseWinner(interaction.values[0]);
+      if (!res.ok) return interaction.reply(ephemeral(failText(res)));
+      return finish(interaction, session);
+    }
+
+    if (action === 'close') {
+      session.close('no-winner');
+      return finish(interaction, session);
+    }
+
+    if (action === 'lock') {
+      await interaction.deferUpdate();
+      return lockRolls(session, 'leader');
+    }
+
+    if (action === 'reset') {
+      const userId = interaction.values[0];
+      const res = session.reset(userId);
+      if (!res.ok) return interaction.reply(ephemeral(failText(res)));
+      await interaction.deferUpdate();
+      store.save();
+      await render(session);
+      const thread = await channel(session.threadId);
+      await thread.send({
+        content: `↩️ <@${userId}>, deine Entscheidung wurde vom Leader zurückgesetzt – du kannst neu wählen.`,
+        allowedMentions: { users: [userId] },
+      });
+      return;
+    }
+
+    if (action === 'add') {
+      await interaction.deferUpdate();
+      const members = await resolveMembers(interaction.guild, {
+        users: [...interaction.users.keys()],
+        roles: [...interaction.roles.keys()],
+      });
+      const added = session.addParticipants([...members.keys()], namesOf(members));
+      if (!added.length) return interaction.followUp(ephemeral('Alle Ausgewählten sind schon dabei (oder die Rollzeit ist vorbei).'));
+      store.save();
+      await render(session);
+      await pingPlayers(await channel(session.threadId), added, `➕ Nachträglich dabei bei **${session.item.name}**: `);
+    }
+  }
+
+  // ---------- Slash-Commands: /leader, /einrichten ----------
+
+  async function handleLeaderCommand(interaction) {
+    const sub = interaction.options.getSubcommand();
+    const guildId = interaction.guildId;
+
+    if (sub === 'liste') {
+      const { leaders } = store.guild(guildId);
+      const list = [...leaders.roles.map((id) => `<@&${id}>`), ...leaders.users.map((id) => `<@${id}>`)];
+      return interaction.reply(
+        ephemeral(
+          `**Loot-Leader:** ${list.length ? list.join(', ') : '*noch keine*'}\n` +
+            '*Bot-Admins (Server-Besitzer und Administratoren) haben immer Leader-Rechte.*',
+        ),
+      );
+    }
+
+    if (!isBotAdmin(whoInteracts(interaction))) {
+      return interaction.reply(ephemeral('Nur Bot-Admins (Server-Besitzer oder Administratoren) können Leader festlegen.'));
+    }
+
+    const opt = interaction.options.get('wer', true);
+    const kind = opt.role ? 'roles' : 'users';
+    const targetId = opt.role?.id ?? opt.user?.id;
+    const label = opt.role ? `<@&${targetId}>` : `<@${targetId}>`;
+    if (opt.user?.bot) return interaction.reply(ephemeral('Bots können keine Leader sein.'));
+    if (targetId === interaction.guildId) return interaction.reply(ephemeral('@everyone kann kein Leader sein.'));
+
+    const add = sub === 'hinzufügen';
+    const changed = store.setLeader(guildId, kind, targetId, add);
+    const text = add
+      ? changed ? `✅ ${label} ist jetzt Loot-Leader.` : `${label} ist bereits Loot-Leader.`
+      : changed ? `✅ ${label} ist kein Loot-Leader mehr.` : `${label} war kein Loot-Leader.`;
+    return interaction.reply(ephemeral(text));
+  }
+
+  async function handleSetupCommand(interaction) {
+    if (!isBotAdmin(whoInteracts(interaction))) {
+      return interaction.reply(ephemeral('Nur Bot-Admins (Server-Besitzer oder Administratoren) können das.'));
+    }
+    const leaderChannel = interaction.options.getChannel('leaderkanal');
+    const lootChannel = interaction.options.getChannel('lootkanal');
+    const cfg =
+      leaderChannel || lootChannel
+        ? store.updateGuild(interaction.guildId, (c) => {
+            if (leaderChannel) c.leaderChannelId = leaderChannel.id;
+            if (lootChannel) c.lootChannelId = lootChannel.id;
+          })
+        : store.guild(interaction.guildId);
+    const show = (id) => (id ? `<#${id}>` : '*nicht gesetzt*');
+    return interaction.reply(
+      ephemeral(
+        `**Leader-Kanal:** ${show(cfg.leaderChannelId)} – hier posten Leader Items\n` +
+          `**Loot-Kanal:** ${show(cfg.lootChannelId)} – hier landen Item + Thread für die Spieler\n` +
+          `**Rollzeit:** ${rollHours} Stunden`,
+      ),
+    );
+  }
+
+  async function registerCommands(guild) {
+    await guild.commands.set(commands.map((c) => c.toJSON())).catch((err) => console.error(`Commands für ${guild.name} fehlgeschlagen:`, err.message));
   }
 
   // ---------- Routing ----------
 
   async function onInteraction(interaction) {
     try {
-      if (interaction.isChatInputCommand() && interaction.commandName === 'loot') {
-        return await handleLootCommand(interaction);
+      if (interaction.isChatInputCommand()) {
+        if (interaction.commandName === 'leader') return await handleLeaderCommand(interaction);
+        if (interaction.commandName === 'einrichten') return await handleSetupCommand(interaction);
+        return;
       }
       if (!interaction.isMessageComponent()) return;
       const [scope, action, id] = interaction.customId.split(':');
-      if (scope === 'setup') {
-        if (action === 'select' && interaction.isMentionableSelectMenu()) return await handleSetupSelect(interaction, id);
-        if (action === 'post') return await handleSetupPost(interaction, id);
-        if (action === 'cancel') return await handleSetupCancel(interaction, id);
-      }
-      if (scope === 'loot') return await handleLootButton(interaction, action, id);
+      if (scope === 'draft') return await handleDraft(interaction, action, id);
+      if (scope === 'loot') return await handleLoot(interaction, action, id);
+      if (scope === 'panel') return await handlePanel(interaction, action, id);
     } catch (err) {
       console.error('Fehler bei Interaction:', err);
-      const msg = ephemeral('❌ Da ist etwas schiefgelaufen. Prüfe, ob der Bot in diesem Kanal schreiben darf.');
+      const msg = ephemeral('❌ Da ist etwas schiefgelaufen. Hat der Bot die nötigen Rechte (Threads, Nachrichten, Dateien)?');
       if (interaction.deferred || interaction.replied) await interaction.followUp(msg).catch(() => {});
       else await interaction.reply(msg).catch(() => {});
     }
   }
 
-  return { onInteraction, sessions, drafts };
+  async function safeOnMessage(message) {
+    try {
+      await onMessage(message);
+    } catch (err) {
+      console.error('Fehler bei Nachricht:', err);
+    }
+  }
+
+  return { onMessage: safeOnMessage, onInteraction, registerCommands, restoreTimers, drafts };
 }

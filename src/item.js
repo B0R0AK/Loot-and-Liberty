@@ -1,4 +1,6 @@
-const URL_RE = /<?(https?:\/\/[^\s<>]+)>?/i;
+const URL_RE_ALL = /<?https?:\/\/[^\s<>]+>?/gi;
+const MENTION_RE = /<@[!&]?\d+>|@everyone|@here/g;
+const QUESTLOG_RE = /<?(https?:\/\/(?:www\.)?questlog\.gg\/[^\s<>]+)>?/i;
 
 /** Macht aus einem URL-Slug wie "sword2h_aa_t1_nomal_001" einen lesbaren Namen. */
 function nameFromUrl(url) {
@@ -9,22 +11,6 @@ function nameFromUrl(url) {
   } catch {
     return null;
   }
-}
-
-/**
- * Zerlegt die Eingabe des Leaders in Name und optionalen Link.
- * Erlaubt: nur Name, nur Link (z. B. Questlog) oder "Name + Link".
- */
-export function parseItemInput(input = '') {
-  const text = input.trim();
-  const match = text.match(URL_RE);
-  const url = match ? match[1].replace(/[)\]]+$/, '') : null;
-  const rest = (match ? text.replace(match[0], '') : text).replace(/\s+/g, ' ').trim();
-  return {
-    name: rest || (url && nameFromUrl(url)) || 'Unbekanntes Item',
-    nameFromInput: Boolean(rest),
-    url,
-  };
 }
 
 function metaContent(html, prop) {
@@ -66,4 +52,26 @@ export async function fetchLinkPreview(url, { timeoutMs = 4000 } = {}) {
   } catch {
     return {};
   }
+}
+
+export function findQuestlogUrl(text = '') {
+  return text.match(QUESTLOG_RE)?.[1].replace(/[)\]]+$/, '') ?? null;
+}
+
+/**
+ * Erkennt ein Item in einer Nachricht aus dem Loot-Kanal:
+ * ein Bild-Anhang (Screenshot) und/oder ein Questlog-Link.
+ * Gibt `null` zurück, wenn die Nachricht kein Item enthält.
+ */
+export function detectItem({ content = '', attachments = [] }) {
+  const image = attachments.find((a) => a.contentType?.startsWith('image/'));
+  const url = findQuestlogUrl(content);
+  if (!image && !url) return null;
+  const text = content.replace(URL_RE_ALL, ' ').replace(MENTION_RE, ' ').replace(/\s+/g, ' ').trim();
+  return {
+    name: (text || (url && nameFromUrl(url)) || 'Loot').slice(0, 90),
+    nameFromInput: Boolean(text),
+    url,
+    image: image?.url ?? null,
+  };
 }

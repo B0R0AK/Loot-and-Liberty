@@ -1,51 +1,81 @@
 # Loot and Liberty
 
 Discord-Bot, der das Verteilen von Loot in **Throne and Liberty** einfacher macht.
-Der Leader postet ein Item und wählt aus, wer mitmachen darf. Die Spieler würfeln (1–100) oder passen per Button. Der höchste Wurf gewinnt.
-
-## Funktionen
-
-- **`/loot`**: Item posten, mit Name und/oder **Questlog-Link** und optional einem **Screenshot**.
-  Bei einem Link versucht der Bot, Titel und Bild automatisch aus der Seite zu lesen.
-- **Teilnehmer auswählen**: bis zu 25 **Spieler und/oder Rollen** in einem Auswahlmenü.
-  Bei einer Rolle darf jedes Mitglied dieser Rolle würfeln. Die Ausgewählten werden angepingt.
-- **🎲 Würfeln / 🚫 Passen**: Jeder hat genau eine Entscheidung. Wer nicht eingetragen ist, bekommt einen privaten Hinweis.
-- **Live-Stand** im Embed: sortiert nach Wurf, dann gepasst, dann noch offen.
-- **Ende**, sobald alle entschieden haben, die Zeit abläuft (Standard 10 Min.) oder der Leader auf **🛑 Beenden** klickt.
-  Danach wird der Gewinner angepingt.
-- **Gleichstand**: Der Leader kann per Button ein **Stechen** nur unter den Gleichplatzierten starten.
 
 ## Ablauf
 
-1. Leader: `/loot item:<Name oder Questlog-Link> [bild:<Screenshot>] [dauer:<Minuten>]`
-2. In der privaten Vorschau Spieler oder Rollen auswählen und **Posten** klicken.
-3. Spieler klicken **Würfeln** oder **Passen**.
-4. Der Bot verkündet den Gewinner.
+Es gibt zwei Kanäle:
+- einen **Leader-Kanal** (z. B. `#loot-leitung`), den nur Leader sehen,
+- einen **Loot-Kanal** (z. B. `#loot`) für alle.
+
+1. **Leader postet das Item** im Leader-Kanal: einen **Screenshot** oder einen **Questlog-Link**, optional mit Text als Item-Name.
+2. **„Wer darf rollen?“** erscheint direkt darunter. Der Leader wählt Spieler oder Rollen aus der **Liste**
+   oder schreibt sie als `@Name` / `@Rolle` in den Leader-Kanal. `@Erwähnungen` im Item-Post werden direkt übernommen.
+   Im zweiten Feld legt er fest, **wer die Verlosung verwaltet**: einzelne Leader, eine oder mehrere Leader-Rollen oder beides.
+   Er selbst verwaltet immer mit. Dann klickt er auf **📣 Posten & Spieler pingen**.
+3. **Der Bot postet das Item mit Bild im Loot-Kanal** und öffnet daran einen **Thread** mit der Roll-Liste.
+   Alle Ausgewählten werden im Thread angepingt. Bei einer Rolle wird jedes Mitglied einzeln angepingt.
+4. **Die Spieler haben 24 Stunden** (einstellbar). In der Zeit wählen sie, **wofür** sie rollen, und würfeln 1–100:
+   ⭐ BiS-Item · 💧 Watermark Upgrade · 📜 Lithografie · 💰 Verkauf · ✨ Potential.
+   Oder sie klicken **🚫 Passen**. Nur ausgewählte Spieler können würfeln.
+5. **Roll-Liste:** Die Würfe sind nach Grund gruppiert (BiS zuerst) und darin nach Höhe sortiert.
+   Die Liste steht im Thread und im Leader-Panel.
+6. **Ende der Rollzeit:** nach 24 Stunden oder früher per **⏹️ Rollen jetzt beenden**.
+   Der Bot pingt dann die Verwalter im Leader-Kanal an.
+7. **Leader-Panel** im Leader-Kanal, nur für die Verwalter dieser Verlosung:
+   - 👑 **Gewinner auswählen**: Der Bot verkündet ihn im Thread und vermerkt ihn an der Item-Nachricht.
+   - ➕ **Spieler oder Rollen hinzufügen** (während der Rollzeit).
+   - ↩️ **Entscheidung zurücksetzen**, z. B. nach einem Fehlklick (während der Rollzeit).
+   - ⏹️ **Rollen jetzt beenden** und **Ohne Gewinner schließen**.
+
+## Rechte
+
+| Wer | Darf |
+| --- | --- |
+| **Bot-Admins**: Server-Besitzer, Administratoren und `BOT_ADMIN_IDS` | Leader festlegen (`/leader`), Kanäle einrichten (`/einrichten`), alles, was Leader und Verwalter dürfen |
+| **Loot-Leader**: per `/leader hinzufügen` festgelegte Spieler oder Rollen | Items posten, auswählen, wer rollt und wer verwaltet |
+| **Verwalter einer Verlosung**: der Ersteller plus die beim Posten gewählten Leader oder Leader-Rollen | Das Panel dieser Verlosung bedienen |
+| **Ausgewählte Spieler** | Würfeln oder passen |
+
+### Befehle
+
+- `/leader hinzufügen wer:@Name` oder `wer:@Rolle`: macht einen Spieler oder eine Rolle zum Loot-Leader.
+- `/leader entfernen wer:@Name`: entzieht die Leader-Rechte.
+- `/leader liste`: zeigt alle Loot-Leader.
+- `/einrichten leaderkanal:#loot-leitung lootkanal:#loot`: legt die Kanäle fest. Ohne Angaben zeigt der Befehl die aktuelle Einstellung.
+
+Die Befehle registriert der Bot beim Start automatisch auf jedem Server.
 
 ## Einrichtung
 
 Voraussetzung: Node.js 22 oder neuer.
 
-1. Im [Discord Developer Portal](https://discord.com/developers/applications) eine Application mit Bot anlegen.
-2. Unter **Bot → Privileged Gateway Intents** den **Server Members Intent** aktivieren.
-   Den braucht der Bot, um alle Mitglieder einer Rolle zu finden.
-3. Den Bot mit den Scopes `bot` und `applications.commands` einladen, mit den Rechten
-   *Kanäle ansehen*, *Nachrichten senden*, *Links einbetten* und *Nachrichtenverlauf lesen*.
-   Damit Rollen-Pings funktionieren, muss die Rolle erwähnbar sein oder der Bot braucht *@everyone/@here und alle Rollen erwähnen*.
-4. Konfiguration:
+1. Im [Discord Developer Portal](https://discord.com/developers/applications) eine Application **„Loot and Liberty“** mit Bot anlegen.
+2. Unter **Bot → Privileged Gateway Intents** aktivieren:
+   - **Server Members Intent**: um alle Mitglieder einer Rolle zu finden.
+   - **Message Content Intent**: um Screenshots, Links und @Erwähnungen im Leader-Kanal zu lesen.
+3. Den Bot mit den Scopes `bot` und `applications.commands` einladen.
+4. Zwei Kanäle anlegen: `#loot-leitung` (nur Leader) und `#loot` (alle). Der Bot braucht diese Rechte:
+   - **`#loot-leitung`**: Kanal ansehen, Nachrichten senden, Links einbetten, Nachrichtenverlauf lesen, Reaktionen hinzufügen.
+   - **`#loot`**: Kanal ansehen, Nachrichten senden, Dateien anhängen, Links einbetten, Öffentliche Threads erstellen, Nachrichten in Threads senden.
+5. Starten:
    ```bash
-   cp .env.example .env   # Token, Client-ID und optional Server-ID eintragen
+   cp .env.example .env   # DISCORD_TOKEN eintragen
    npm install
-   npm run deploy         # Slash-Command registrieren (einmalig bzw. nach Änderungen)
    npm start
    ```
+6. Im Discord als Admin: `/einrichten leaderkanal:#loot-leitung lootkanal:#loot`, danach `/leader hinzufügen wer:@Leader`.
 
-### Wer ist Leader?
+### Konfiguration (`.env`)
 
-- Ist `LOOT_LEADER_ROLE_IDS` gesetzt (kommagetrennte Rollen-IDs), dürfen nur diese Rollen (und Admins) Loot posten.
-- Sonst darf das jeder mit der Berechtigung **Nachrichten verwalten**.
-
-Beenden und Stechen dürfen der Leader, der die Verlosung gestartet hat, und alle anderen Leader.
+| Variable | Bedeutung |
+| --- | --- |
+| `DISCORD_TOKEN` | Bot-Token |
+| `LOOT_LEADER_CHANNEL_ID`, `LOOT_CHANNEL_ID` | Optional: Vorgabe für die Kanäle. `/einrichten` hat Vorrang |
+| `BOT_ADMIN_IDS` | Optional: zusätzliche Bot-Admins (Nutzer-IDs, kommagetrennt) |
+| `LOOT_ROLL_HOURS` | Optional: Rollzeit in Stunden, Standard 24 |
+| `BOT_NAME` | Optional, Standard `Loot and Liberty` |
+| `DATA_FILE` | Optional, Standard `data/sessions.json`. Hier liegen offene Verlosungen, Leader und Kanal-Einstellungen |
 
 ## Entwicklung
 
@@ -53,18 +83,18 @@ Beenden und Stechen dürfen der Leader, der die Verlosung gestartet hat, und all
 npm test
 ```
 
-Aufbau:
-
 | Datei | Inhalt |
 | --- | --- |
-| `src/session.js` | Würfel- und Verlosungslogik, ohne Discord-Abhängigkeit |
-| `src/item.js` | Item-Eingabe parsen, Link-Vorschau (OpenGraph) |
-| `src/render.js` | Embeds und Buttons |
-| `src/bot.js` | Interaction-Handling (`/loot`, Auswahl, Buttons, Timer) |
-| `src/commands.js`, `src/deploy-commands.js` | Slash-Command-Definition und Registrierung |
+| `src/session.js` | Verlosungslogik: Würfeln, Passen, Roll-Gründe, Gewinner (ohne Discord-Abhängigkeit) |
+| `src/item.js` | Screenshot/Questlog-Link erkennen, Link-Vorschau |
+| `src/render.js` | Embeds, Auswahlmenüs, Buttons |
+| `src/bot.js` | Discord-Ablauf: Leader-Kanal, Auswahl, Item-Post + Thread, Rollzeit, Panel, Befehle |
+| `src/commands.js` | Slash-Commands `/leader` und `/einrichten` |
+| `src/store.js` | Speichern von Verlosungen, Leadern und Kanälen als JSON |
+| `src/index.js` | Start, Intents, Konfiguration |
 
 ## Bekannte Grenzen und Ideen
 
-- Laufende Verlosungen liegen nur im Speicher. Nach einem Neustart des Bots sind offene Verlosungen nicht mehr bedienbar.
+- Die Frage „Wer darf rollen?“ läuft nach 30 Minuten ab und überlebt keinen Neustart. Laufende Verlosungen samt Rollzeit bleiben erhalten.
+- Gewinner- und Zurücksetzen-Menü zeigen höchstens 25 Einträge (Discord-Limit).
 - Geplant: mehrere Würfe pro Spieler und ein anderer Zahlenbereich. `LootSession` hat dafür schon `rollMax`.
-- Mögliche Erweiterungen: Need/Greed-Stufen, Loot-Historie, Sperre für kürzliche Gewinner.
