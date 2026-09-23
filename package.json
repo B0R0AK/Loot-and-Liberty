@@ -13,6 +13,8 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.9",
+    "dejavu-fonts-ttf": "^2.37.3",
     "discord.js": "^14.27.0"
   }
 }

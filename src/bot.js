@@ -1,6 +1,7 @@
 import { MessageFlags, PermissionFlagsBits } from 'discord.js';
 import { commands } from './commands.js';
 import { detectItem, fetchLinkPreview } from './item.js';
+import { renderItemCard } from './itemcard.js';
 import { HELP_TEXT, hoursLabel, lootPayload, openSessionLine, panelView, pingChunks, promptView, renameModal, starterContent, summaryEmbed } from './render.js';
 import { LootSession, purposeById } from './session.js';
 
@@ -98,10 +99,19 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       return message.reply('Es ist noch kein Loot-Kanal eingerichtet. Ein Bot-Admin kann das mit `/einrichten lootkanal:#kanal` tun.');
     }
 
+    let imageFile = null;
     if (item.url && (!item.nameFromInput || !item.image)) {
       const preview = await fetchLinkPreview(item.url);
       if (!item.nameFromInput && preview.title) item.name = preview.title.slice(0, 90);
       item.image ??= preview.image ?? null;
+      // Nur Questlog-Link, kein Screenshot → Item-Karte mit Stats selbst zeichnen.
+      if (!item.image && preview.questlog) {
+        try {
+          imageFile = { attachment: await renderItemCard(preview.questlog), name: 'item.png' };
+        } catch (err) {
+          console.error('Item-Karte konnte nicht erzeugt werden:', err.message);
+        }
+      }
     }
 
     const draft = {
@@ -112,15 +122,20 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       selection: mentionsOf(message),
       managers: { users: [], roles: [] },
       rollHours: cfg.rollHours,
+      imageFile,
       prompt: null,
     };
     drafts.set(draft.id, draft);
-    draft.prompt = await message.reply({ ...promptView(draft), allowedMentions: { parse: [] } });
+    draft.prompt = await message.reply({
+      ...promptView(draft),
+      ...(imageFile ? { files: [imageFile] } : {}),
+      allowedMentions: { parse: [] },
+    });
 
     setTimeout(async () => {
       if (drafts.get(draft.id) !== draft) return;
       drafts.delete(draft.id);
-      await draft.prompt.edit({ content: '⌛ Abgelaufen – poste das Item einfach neu.', embeds: [], components: [] }).catch(() => {});
+      await draft.prompt.edit({ content: '⌛ Abgelaufen – poste das Item einfach neu.', embeds: [], components: [], attachments: [] }).catch(() => {});
     }, DRAFT_TTL_MS).unref();
   }
 
@@ -170,7 +185,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
 
     if (action === 'cancel') {
       drafts.delete(id);
-      return interaction.update({ content: `Abgebrochen: **${draft.item.name}**`, embeds: [], components: [] });
+      return interaction.update({ content: `Abgebrochen: **${draft.item.name}**`, embeds: [], components: [], attachments: [] });
     }
 
     if (action === 'start') {
@@ -207,8 +222,9 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
 
     // Das Bild wird neu hochgeladen, damit es dauerhaft sichtbar bleibt.
     const base = { content: starterContent(session), allowedMentions: { parse: [] } };
-    const starter = draft.item.image
-      ? await lootChannel.send({ ...base, files: [imageFile(draft.item.image)] }).catch(() => lootChannel.send(base))
+    const file = draft.imageFile ?? (draft.item.image ? imageFile(draft.item.image) : null);
+    const starter = file
+      ? await lootChannel.send({ ...base, files: [file] }).catch(() => lootChannel.send(base))
       : await lootChannel.send(base);
     const thread = await starter.startThread({ name: `🎲 ${draft.item.name}`.slice(0, 100), autoArchiveDuration: 4320 });
 

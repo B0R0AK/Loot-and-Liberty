@@ -81,3 +81,57 @@ test('Questlog-Schnittstelle down → Fallback ohne Absturz', async (t) => {
   t.mock.method(console, 'warn', () => {});
   assert.deepEqual(await fetchLinkPreview('https://questlog.gg/throne-and-liberty/en/db/item/np_gem'), {});
 });
+
+test('Item-Karte: Stats aus Questlog-Daten, Symbol-Adresse, PNG', async () => {
+  const { statLines, iconUrl, renderItemCard, gradeInfo } = await import('../src/itemcard.js');
+  const itemStats = {
+    main: { 20: { mainhand: { min: 1, max: 2, statId: 'attack_power_main_hand' } },
+      10: { armor: null, offhand: null, shield: { value: 38, statId: 'damage_reduction' },
+        mainhand: { max: 97, min: 62, statId: 'attack_power_main_hand' },
+        extra: { shield_block_chance: 1800, attack_range_main_hand: 350, attack_speed_main_hand: 550 } } },
+    extra: { 10: { hp_max: 1275, some_new_stat: 5 } },
+  };
+  assert.deepEqual(statLines(itemStats, 'en'), {
+    primary: [['Max Damage', '62 ~ 97'], ['Damage Reduction', '38']],
+    secondary: [['Block Chance', '18%'], ['Range', '3.5m'], ['Attack Speed', '0.6s']],
+    extra: [['Max Health', '1,275'], ['Some New Stat', '5']],
+    itemLevel: 10,
+    lockedEffects: 0,
+  });
+  assert.deepEqual(statLines(itemStats, 'de').secondary[1], ['Reichweite', '3,5m']);
+  assert.deepEqual(statLines(undefined), { primary: [], secondary: [], extra: [], itemLevel: null, lockedEffects: 0 });
+  assert.equal(
+    iconUrl('/assets/Game/Image/Icon/Item_128/Equip/Weapon/IT_P_Sword_00022.IT_P_Sword_00022'),
+    'https://cdn.questlog.gg/throne-and-liberty/assets/Game/Image/Icon/Item_128/Equip/Weapon/IT_P_Sword_00022.webp',
+  );
+  assert.equal(iconUrl('/common/fallback-db-image/litograph'), null);
+  assert.equal(gradeInfo(31).en, 'Rare');
+  assert.equal(gradeInfo(11).de, 'Gewöhnlich');
+
+  const png = await renderItemCard({ name: 'Golem Shattering Sword', grade: 31, subCategory: 'sword', itemStats }, { icon: null });
+  assert.deepEqual([...png.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
+});
+
+test('Item-Karte: Werte wie im Spiel-Tooltip (Calanthias Aegis, echte Questlog-Daten)', async () => {
+  const { statLines, gradeInfo } = await import('../src/itemcard.js');
+  const itemStats = {
+    main: { 75: { armor: null, offhand: null,
+      extra: { shield_block_chance: 3600, attack_range_main_hand: 350, attack_speed_main_hand: 605 },
+      shield: { value: 158, statId: 'damage_reduction' },
+      mainhand: { max: 207, min: 115, statId: 'attack_power_main_hand' } } },
+    extra: { 75: { per: 17, all_species_damage_amplification: 720 } },
+    traits: { hp_max: [150, 300] },
+    resonance: null,
+    random_stat_group_1: [{ stat_id: 'str', base_value: 14 }],
+    random_stat_group_2: [{ stat_id: 'dex', base_value: 14 }],
+  };
+  // Erwartung = Werte aus dem In-Game-Screenshot
+  assert.deepEqual(statLines(itemStats, 'en'), {
+    primary: [['Max Damage', '115 ~ 207'], ['Damage Reduction', '158']],
+    secondary: [['Block Chance', '36%'], ['Range', '3.5m'], ['Attack Speed', '0.6s']],
+    extra: [['Perception', '17'], ['Species Damage Boost', '72']],
+    itemLevel: 75,
+    lockedEffects: 2,
+  });
+  assert.equal(gradeInfo(51).en, 'Heroic');
+});
