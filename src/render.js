@@ -9,7 +9,16 @@ import {
 import { PURPOSES, Status, purposeById } from './session.js';
 
 export const MAX_SELECT = 25;
-const COLORS = { prompt: 0x5865f2, open: 0xf1c40f, won: 0x2ecc71, none: 0x95a5a6 };
+const COLORS = { prompt: 0x5865f2, open: 0xe8b04a, locked: 0xe67e22, won: 0x2ecc71, none: 0x80848e };
+const ITEM_ICON = '🎁';
+
+/** Fortschrittsbalken, z. B. ▰▰▰▰▰▰▱▱▱▱ */
+export function progressBar(done, total, width = 10) {
+  const filled = total ? Math.round((done / total) * width) : 0;
+  return '▰'.repeat(filled) + '▱'.repeat(width - filled);
+}
+
+const ts = (ms, style) => `<t:${Math.floor(ms / 1000)}:${style}>`;
 const FIELD_LIMIT = 1024;
 
 /** Liste von Zeilen/Erwähnungen so kürzen, dass sie in ein Feld passt. */
@@ -24,7 +33,7 @@ function fit(items, sep, limit = FIELD_LIMIT) {
 }
 
 function itemEmbed(item, color, { image = true } = {}) {
-  const embed = new EmbedBuilder().setTitle(`💰 ${item.name}`).setColor(color);
+  const embed = new EmbedBuilder().setTitle(`${ITEM_ICON} ${item.name}`).setColor(color);
   if (item.url) embed.setURL(item.url);
   if (image && item.image) embed.setImage(item.image);
   return embed;
@@ -37,10 +46,11 @@ export function promptView(draft) {
   const picked = [...roles.map((id) => `<@&${id}>`), ...users.map((id) => `<@${id}>`)];
   const embed = itemEmbed(draft.item, COLORS.prompt, { image: false })
     .setDescription(
-      '**Wer darf rollen?** Wähle Spieler oder Rollen aus der Liste oder schreib sie mit `@Name` / `@Rolle` hier in den Kanal.\n' +
-        `Danach postet der Bot das Item in <#${draft.lootChannelId}> und pingt die Spieler an.`,
+      '### 👥 Wer darf rollen?\n' +
+        'Wähle unten Spieler oder Rollen aus – oder schreib `@Name` / `@Rolle` hier in den Kanal.\n' +
+        `-# Danach landet das Item in <#${draft.lootChannelId}> und alle Ausgewählten werden gepingt.`,
     )
-    .addFields({ name: 'Ausgewählt', value: fit(picked, ', ') });
+    .addFields({ name: `Ausgewählt${picked.length ? ` (${picked.length})` : ''}`, value: picked.length ? fit(picked, ' ') : '*noch niemand*' });
 
   return {
     content: '',
@@ -131,17 +141,20 @@ export function panelView(session) {
 
 // ---------- Thread: Roll-Liste ----------
 
+/** Würfe nach Grund gruppiert; der höchste Wurf je Grund ist hervorgehoben. */
 function rollLines(session) {
   const lines = [];
   let current = null;
   for (const r of session.rolls()) {
-    if (r.purpose !== current) {
+    const first = r.purpose !== current;
+    if (first) {
       current = r.purpose;
       const p = purposeById(current);
-      lines.push(`${lines.length ? '\n' : ''}**${p.emoji} ${p.label}**`);
+      lines.push(`**${p.emoji} ${p.label}**`);
     }
+    const num = `\`${String(r.roll).padStart(3, ' ')}\``;
     const crown = r.userId === session.winnerId ? ' 🏆' : '';
-    lines.push(`\`${String(r.roll).padStart(3, ' ')}\` <@${r.userId}>${crown}`);
+    lines.push(`> ${first ? `**${num}**` : num}  <@${r.userId}>${crown}`);
   }
   return lines;
 }
@@ -152,39 +165,40 @@ function rollLines(session) {
  */
 export function lootEmbed(session, { panel = false } = {}) {
   const c = session.counts();
-  const color = !session.closed ? COLORS.open : session.winnerId ? COLORS.won : COLORS.none;
+  const decided = c.total - c.pending;
+  const color = session.winnerId ? COLORS.won : session.closed ? COLORS.none : session.rollsLocked ? COLORS.locked : COLORS.open;
+
+  const head = [];
+  if (panel) head.push(`🧵 <#${session.threadId}> · gepostet von <@${session.ownerId}>`);
+  if (session.winnerId) {
+    const w = session.participants.get(session.winnerId);
+    const p = purposeById(w.purpose);
+    head.push(`### 🏆 <@${session.winnerId}> gewinnt`, `mit **${w.roll}** · ${p.emoji} ${p.label}`);
+  } else if (session.closed) {
+    head.push('### ✖️ Ohne Gewinner geschlossen');
+  } else if (session.rollsLocked) {
+    head.push('### ⏹️ Rollzeit vorbei', 'Der Leader wählt jetzt den Gewinner.');
+  } else {
+    if (session.endsAt) head.push(`⏰ Rollzeit endet **${ts(session.endsAt, 'R')}**`);
+    head.push(`\`${progressBar(decided, c.total)}\` **${decided}**/${c.total} entschieden`);
+  }
+
   const lines = rollLines(session);
-  const deadline = session.endsAt ? `<t:${Math.floor(session.endsAt / 1000)}:R>` : null;
-  const status = session.closed
-    ? ''
-    : session.rollsLocked
-      ? '⏹️ **Rollen beendet** – der Leader wählt jetzt den Gewinner.\n\n'
-      : deadline
-        ? `⏰ Rollzeit endet ${deadline}\n\n`
-        : '';
-  const head = (panel ? `🧵 <#${session.threadId}> · von <@${session.ownerId}>\n` : '') + status;
-  const embed = itemEmbed(session.item, color, { image: false }).setDescription(
-    (head + (lines.length ? fit(lines, '\n', 3800) : '*Noch keine Würfe.*')).trim(),
-  );
+  const body = lines.length ? fit(lines, '\n', 3600) : '*Noch keine Würfe – wähle unten, wofür du rollst.*';
+  const embed = itemEmbed(session.item, color, { image: false }).setDescription(`${head.join('\n')}\n\n${body}`);
 
   const passed = session.withStatus(Status.PASSED).map((id) => `<@${id}>`);
   const pending = session.withStatus(Status.PENDING).map((id) => `<@${id}>`);
-  if (passed.length) embed.addFields({ name: `🚫 Gepasst (${passed.length})`, value: fit(passed, ' ') });
-  if (pending.length && session.rollingOpen) embed.addFields({ name: `⏳ Offen (${pending.length})`, value: fit(pending, ' ') });
+  if (passed.length) embed.addFields({ name: `🚫 Gepasst · ${passed.length}`, value: fit(passed, ' '), inline: true });
+  if (pending.length && session.rollingOpen) embed.addFields({ name: `⏳ Noch offen · ${pending.length}`, value: fit(pending, ' '), inline: true });
 
-  if (session.winnerId) {
-    embed.addFields({ name: 'Gewinner', value: `🏆 <@${session.winnerId}>` });
+  if (session.closed) {
     embed.setFooter({ text: 'Verlosung abgeschlossen' });
-  } else if (session.closed) {
-    embed.setFooter({ text: 'Ohne Gewinner geschlossen' });
   } else if (session.rollsLocked) {
-    embed.setFooter({ text: `${c.rolled} Würfe · ${c.passed} gepasst${c.pending ? ` · ${c.pending} nicht entschieden` : ''}` });
-  } else if (panel) {
-    embed.setFooter({ text: `${c.total - c.pending}/${c.total} entschieden` });
+    embed.setFooter({ text: `${c.rolled} gewürfelt · ${c.passed} gepasst${c.pending ? ` · ${c.pending} ohne Entscheidung` : ''}` });
   } else {
-    embed.setFooter({
-      text: `Würfel 1–${session.rollMax} · ${c.total - c.pending}/${c.total} entschieden · Nur ausgewählte Spieler können würfeln oder passen.`,
-    });
+    embed.setFooter({ text: panel ? 'Rollzeit endet' : `🎲 1–${session.rollMax} · nur ausgewählte Spieler · Rollzeit endet` });
+    if (session.endsAt) embed.setTimestamp(session.endsAt);
   }
   return embed;
 }
@@ -208,13 +222,17 @@ export function lootComponents(session) {
 /** Text der Item-Nachricht im Loot-Kanal (das Bild hängt als Datei daran). */
 export function starterContent(session) {
   const { item } = session;
+  const c = session.counts();
   const link = item.url ? ` · [Questlog](<${item.url}>)` : '';
   let status;
-  if (session.winnerId) status = `🏆 Vergeben an <@${session.winnerId}>`;
-  else if (session.closed) status = '✖️ Ohne Gewinner geschlossen';
-  else if (session.rollsLocked) status = '⏹️ Rollen beendet – der Leader wählt den Gewinner';
-  else status = `🎲 Rollen im Thread bis <t:${Math.floor(session.endsAt / 1000)}:f>`;
-  return `## 💰 ${item.name}${link}\n${status}`;
+  if (session.winnerId) {
+    const w = session.participants.get(session.winnerId);
+    const p = purposeById(w.purpose);
+    status = `🏆 **Vergeben an <@${session.winnerId}>** · ${w.roll} · ${p.emoji} ${p.label}`;
+  } else if (session.closed) status = '✖️ **Ohne Gewinner geschlossen**';
+  else if (session.rollsLocked) status = '⏹️ **Rollzeit vorbei** · der Leader wählt den Gewinner';
+  else status = `🎲 **Verlosung läuft** · endet ${ts(session.endsAt, 'f')} (${ts(session.endsAt, 'R')})`;
+  return `## ${ITEM_ICON} ${item.name}\n${status}\n-# 👥 ${c.total} Spieler${link} · Würfeln & Passen im Thread ↓`;
 }
 
 export function lootPayload(session) {

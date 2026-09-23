@@ -113,3 +113,11 @@ test('Rollzeit wird gespeichert', () => {
   assert.equal(copy.endsAt, 123);
   assert.equal(copy.rollsLocked, true);
 });
+
+test('Fortschrittsbalken', async () => {
+  const { progressBar } = await import('../src/render.js');
+  assert.equal(progressBar(0, 7), '▱▱▱▱▱▱▱▱▱▱');
+  assert.equal(progressBar(6, 7), '▰▰▰▰▰▰▰▰▰▱');
+  assert.equal(progressBar(7, 7), '▰▰▰▰▰▰▰▰▰▰');
+  assert.equal(progressBar(0, 0), '▱▱▱▱▱▱▱▱▱▱');
+});

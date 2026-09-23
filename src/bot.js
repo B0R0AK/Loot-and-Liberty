@@ -192,7 +192,7 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
     store.set(session);
     scheduleLock(session);
 
-    await pingPlayers(thread, [...members.keys()], `🎲 **${session.item.name}** – ihr dürft rollen! `);
+    await pingPlayers(thread, [...members.keys()], `🔔 **${session.item.name}** – ihr seid dran! Wählt oben, wofür ihr rollt, oder passt. `);
     await interaction.editReply(panelView(session));
   }
 
@@ -225,7 +225,7 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
     store.save();
     await render(session, { starter: true });
     const thread = await channel(session.threadId);
-    await thread.send(reason === 'timeout' ? '⏰ Die Rollzeit ist vorbei. Der Leader wählt jetzt den Gewinner.' : '⏹️ Der Leader hat das Rollen beendet.');
+    await thread.send(reason === 'timeout' ? '⏰ **Die Rollzeit ist vorbei.** Der Leader wählt jetzt den Gewinner.' : '⏹️ **Der Leader hat das Rollen beendet.** Der Gewinner wird gleich gewählt.');
     const panel = await channel(session.panelChannelId);
     await panel.send({
       content: `⏹️ **${session.item.name}**: Rollen beendet. <@${session.ownerId}>, bitte wähle den Gewinner aus.`,
@@ -326,7 +326,7 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
     if (session.winnerId) {
       const p = session.participants.get(session.winnerId);
       await thread.send({
-        content: `🏆 <@${session.winnerId}> bekommt **${session.item.name}** (Roll **${p.roll}**, ${purposeById(p.purpose)?.label}).`,
+        content: `🏆 Glückwunsch <@${session.winnerId}>! **${session.item.name}** gehört dir (Roll **${p.roll}** · ${purposeById(p.purpose)?.emoji} ${purposeById(p.purpose)?.label}).`,
         allowedMentions: { users: [session.winnerId] },
       });
     } else {
