@@ -35,7 +35,7 @@ const TYPES = {
 
 /** Bekannte Stat-IDs → Name und Einheit. Unbekannte werden aus der ID lesbar gemacht. */
 const STATS = {
-  attack_power_main_hand: { en: 'Damage', de: 'Schaden' },
+  attack_power_main_hand: { en: 'Max Damage', de: 'Max. Schaden' },
   attack_power_off_hand: { en: 'Off-Hand Damage', de: 'Nebenhand-Schaden' },
   damage_reduction: { en: 'Damage Reduction', de: 'Schadensreduktion' },
   armor: { en: 'Defense', de: 'Verteidigung' },
@@ -45,6 +45,7 @@ const STATS = {
   hp_max: { en: 'Max Health', de: 'Max. Lebenspunkte' },
   mp_max: { en: 'Max Mana', de: 'Max. Mana' },
   perception: { en: 'Perception', de: 'Wahrnehmung' },
+  all_species_damage_amplification: { en: 'Species Damage Boost', de: 'Artenschaden-Bonus', unit: 'tenth' },
   str: { en: 'Strength', de: 'Stärke' },
   dex: { en: 'Dexterity', de: 'Geschicklichkeit' },
   int: { en: 'Wisdom', de: 'Weisheit' },
@@ -60,18 +61,21 @@ const pretty = (id) =>
     .replace(/\b\w/g, (c) => c.toUpperCase());
 
 function formatValue(id, value, lang) {
-  const unit = STATS[id]?.unit ?? (/_chance$|_rate$/.test(id) ? 'percent' : null);
+  // Einheiten wie im Spiel-Tooltip: 3600 → 36 %, 350 → 3,5 m, 605 → 0,6 s, 720 (Verstärkung) → 72
+  const unit = STATS[id]?.unit ?? (/_chance$|_rate$/.test(id) ? 'percent' : /_amplification$/.test(id) ? 'tenth' : null);
   const nf = (n, d = 0) => n.toLocaleString(lang === 'de' ? 'de-DE' : 'en-US', { maximumFractionDigits: d });
   if (unit === 'percent') return `${nf(value / 100, 1)}%`;
   if (unit === 'meter') return `${nf(value / 100, 1)}m`;
-  if (unit === 'seconds') return `${nf(value / 1000, 2)}s`;
+  if (unit === 'seconds') return `${nf(value / 1000, 1)}s`;
+  if (unit === 'tenth') return nf(value / 10, 1);
   return nf(value);
 }
 
 const label = (id, lang) => STATS[id]?.[lang === 'de' ? 'de' : 'en'] ?? pretty(id);
 
-/** Kleinster Stufen-Schlüssel ("10", …) = Grundwerte des Items. */
-const baseLevel = (obj) => (obj ? obj[Object.keys(obj).sort((a, b) => Number(a) - Number(b))[0]] : null);
+/** Kleinster Stufen-Schlüssel ("10", "75" …) = Item-Level mit den Grundwerten des Items. */
+const baseKey = (obj) => (obj ? Object.keys(obj).sort((a, b) => Number(a) - Number(b))[0] : undefined);
+const baseLevel = (obj) => (obj ? obj[baseKey(obj)] : null);
 
 /**
  * Macht aus den Questlog-Daten Zeilen für die Karte:
@@ -94,7 +98,10 @@ export function statLines(itemStats, lang = 'en') {
   const extra = Object.entries(baseLevel(itemStats?.extra) ?? {})
     .filter(([, v]) => typeof v === 'number')
     .map(([id, v]) => [label(id, lang), formatValue(id, v, lang)]);
-  return { primary, secondary, extra };
+  const level = Number(baseKey(itemStats?.main));
+  // Heroische Effekte werden beim Aufwerten zufällig ausgewürfelt – im Tooltip "gesperrt".
+  const lockedEffects = Object.keys(itemStats ?? {}).filter((k) => /^random_stat_group_\d+$/.test(k) && itemStats[k]?.length).length;
+  return { primary, secondary, extra, itemLevel: Number.isFinite(level) ? level : null, lockedEffects };
 }
 
 /** "/assets/Game/…/IT_P_Sword_00022.IT_P_Sword_00022" → CDN-Adresse als .webp */
@@ -147,16 +154,24 @@ export async function renderItemCard(data, { lang = data.language ?? 'en', icon 
   const W = 560;
   const PAD = 24;
   const grade = gradeInfo(data.grade);
-  const { primary, secondary, extra } = statLines(data.itemStats, lang);
+  const { primary, secondary, extra, itemLevel, lockedEffects } = statLines(data.itemStats, lang);
   const typeName = TYPES[data.subCategory]?.[lang === 'de' ? 1 : 0] ?? (data.subCategory ? pretty(data.subCategory) : '');
   const img = icon === undefined ? await loadIcon(data.icon) : icon;
 
-  const HEADER = 150;
+  const t = (en, de) => (lang === 'de' ? de : en);
+  const effects = Array.from({ length: lockedEffects }, (_, i) => [t(`Heroic Effect ${i + 1} - Locked`, `Heroischer Effekt ${i + 1} – gesperrt`), '']);
+
+  // Kopfhöhe hängt davon ab, ob der Name ein- oder zweizeilig ist.
+  const measure = createCanvas(1, 1).getContext('2d');
+  measure.font = '26px CardBold';
+  const nameLines = Math.min(2, wrap(measure, data.name, (img ? W - PAD - 104 - 16 : W - PAD) - PAD).length);
+  const HEADER = Math.max(138, (nameLines > 1 ? 118 : 86) + (itemLevel ? 30 : 0) + 22);
   const lineH = { primary: 34, secondary: 28, extra: 28 };
   let bodyH = 0;
   if (primary.length) bodyH += primary.length * lineH.primary + 16;
   if (secondary.length) bodyH += secondary.length * lineH.secondary + 16;
   if (extra.length) bodyH += extra.length * lineH.extra + 16;
+  if (effects.length) bodyH += effects.length * lineH.extra + 16;
   const H = HEADER + Math.max(bodyH, 20) + 36;
 
   const canvas = createCanvas(W, H);
@@ -206,6 +221,16 @@ export async function renderItemCard(data, { lang = data.language ?? 'en', icon 
   const gw = ctx.measureText(gradeName).width;
   ctx.fillStyle = '#d6d6d6';
   if (typeName) ctx.fillText(`${gradeName ? '  |  ' : ''}${typeName}`, PAD + gw, subY);
+  if (itemLevel) {
+    ctx.font = '19px Card';
+    ctx.fillStyle = '#d6d6d6';
+    const lvLabel = `${t('Item Level', 'Gegenstandsstufe')} `;
+    ctx.fillText(lvLabel, PAD, subY + 30);
+    const lvX = PAD + ctx.measureText(lvLabel).width + 2;
+    ctx.font = '19px CardBold';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(String(itemLevel), lvX, subY + 30);
+  }
 
   // Werte
   let y = HEADER;
@@ -241,6 +266,7 @@ export async function renderItemCard(data, { lang = data.language ?? 'en', icon 
   block(primary, lineH.primary, 22, '#ffffff', false);
   block(secondary, lineH.secondary, 18, '#ffffff', false);
   block(extra, lineH.extra, 18, grade.color, true);
+  block(effects, lineH.extra, 18, '#8a8d93', true);
 
   // Fußzeile
   ctx.font = '13px Card';
