@@ -83,7 +83,7 @@ export async function fetchQuestlogItem({ language, id }, { timeoutMs = 6000 } =
   });
   if (!res.ok) throw new Error(`Questlog-API HTTP ${res.status}`);
   const data = (await res.json())?.result?.data;
-  return { title: data?.name?.trim() || null, image: null, description: data?.description ?? null };
+  return { title: data?.name?.trim() || null, image: null, description: data?.description ?? null, questlog: data ?? null };
 }
 
 /**

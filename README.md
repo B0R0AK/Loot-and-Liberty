@@ -9,6 +9,7 @@ Es gibt zwei Kanäle:
 - einen **Loot-Kanal** (z. B. `#loot`) für alle.
 
 1. **Leader postet das Item** im Leader-Kanal: einen **Screenshot** oder einen **Questlog-Link**, optional mit Text als Item-Name.
+   Bei einem Questlog-Link ohne Screenshot zeichnet der Bot selbst eine **Item-Karte** mit Symbol, Seltenheit und Stats. Die Daten kommen von Questlog, in der Sprache des Links.
 2. **„Wer darf rollen?“** erscheint direkt darunter. Der Leader wählt Spieler oder Rollen aus der **Liste**
    oder schreibt sie als `@Name` / `@Rolle` in den Leader-Kanal. `@Erwähnungen` im Item-Post werden direkt übernommen.
    Im zweiten Feld legt er fest, **wer die Verlosung verwaltet**: einzelne Leader, eine oder mehrere Leader-Rollen oder beides.
@@ -97,7 +98,8 @@ npm test
 | Datei | Inhalt |
 | --- | --- |
 | `src/session.js` | Verlosungslogik: Würfeln, Passen, Roll-Gründe, Gewinner (ohne Discord-Abhängigkeit) |
-| `src/item.js` | Screenshot/Questlog-Link erkennen, Link-Vorschau |
+| `src/item.js` | Screenshot/Questlog-Link erkennen, Name über Questlogs Daten-Schnittstelle |
+| `src/itemcard.js` | Item-Karte (PNG) mit Stats aus Questlog-Daten zeichnen |
 | `src/render.js` | Embeds, Auswahlmenüs, Buttons |
 | `src/bot.js` | Discord-Ablauf: Leader-Kanal, Auswahl, Item-Post + Thread, Rollzeit, Panel, Befehle |
 | `src/commands.js` | Slash-Commands `/leader`, `/einrichten`, `/loot`, `/hilfe` |
