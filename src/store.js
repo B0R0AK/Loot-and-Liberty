@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { LootSession } from './session.js';
 
-const emptyGuild = () => ({ leaderChannelId: null, lootChannelId: null, leaders: { users: [], roles: [] } });
+const emptyGuild = () => ({ leaderChannelId: null, lootChannelId: null, rollHours: null, leaders: { users: [], roles: [] } });
 
 /**
  * Speichert offene Verlosungen und die Server-Einstellungen (Kanäle, Leader)
@@ -47,13 +47,14 @@ export class SessionStore {
 
   // ---------- Server-Einstellungen ----------
 
-  /** Einstellungen eines Servers; nicht gesetzte Kanäle fallen auf die .env-Werte zurück. */
+  /** Einstellungen eines Servers; nicht gesetzte Werte fallen auf die .env-Vorgaben zurück. */
   guild(guildId) {
     const cfg = this.guilds.get(guildId) ?? emptyGuild();
     return {
       ...cfg,
       leaderChannelId: cfg.leaderChannelId ?? this.defaults.leaderChannelId ?? null,
       lootChannelId: cfg.lootChannelId ?? this.defaults.lootChannelId ?? null,
+      rollHours: cfg.rollHours ?? this.defaults.rollHours ?? 24,
     };
   }
 
@@ -76,6 +77,13 @@ export class SessionStore {
       changed = has !== isLeader;
     });
     return changed;
+  }
+
+  /** Offene Verlosungen eines Servers, älteste zuerst. */
+  openSessions(guildId) {
+    return [...this.sessions.values()]
+      .filter((s) => s.guildId === guildId && !s.closed)
+      .sort((a, b) => a.createdAt - b.createdAt);
   }
 
   // ---------- Datei ----------

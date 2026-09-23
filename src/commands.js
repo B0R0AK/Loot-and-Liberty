@@ -33,6 +33,24 @@ export const setupCommand = new SlashCommandBuilder()
       .setName('lootkanal')
       .setDescription('Hierhin postet der Bot das Item mit Thread für die Spieler')
       .addChannelTypes(ChannelType.GuildText),
+  )
+  .addIntegerOption((o) =>
+    o
+      .setName('rollzeit')
+      .setDescription('Standard-Rollzeit in Stunden (1–168); pro Item im Fenster änderbar')
+      .setMinValue(1)
+      .setMaxValue(168),
   );
 
-export const commands = [leaderCommand, setupCommand];
+export const lootCommand = new SlashCommandBuilder()
+  .setName('loot')
+  .setDescription('Verlosungen von Loot and Liberty')
+  .setDMPermission(false)
+  .addSubcommand((s) => s.setName('offen').setDescription('Alle laufenden Verlosungen anzeigen (nur Leader)'));
+
+export const helpCommand = new SlashCommandBuilder()
+  .setName('hilfe')
+  .setDescription('Wie funktioniert Loot and Liberty?')
+  .setDMPermission(false);
+
+export const commands = [leaderCommand, setupCommand, lootCommand, helpCommand];

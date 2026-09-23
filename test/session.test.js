@@ -135,3 +135,13 @@ test('Verwalter: Ersteller, gewählte Leader und Leader-Rollen', () => {
   assert.deepEqual(copy.managers, { users: ['lead2'], roles: ['offiziere', 'raidlead'] });
   assert.equal(new LootSession({ id: 't', ownerId: 'o', item: {}, eligibleIds: ['a'] }).isManager('x', ['r']), false);
 });
+
+test('Rollzeit ändern nur, solange gerollt werden kann', () => {
+  const s = make();
+  s.endsAt = 1000;
+  assert.equal(s.setDeadline(5000), true);
+  assert.equal(s.endsAt, 5000);
+  s.lockRolls();
+  assert.equal(s.setDeadline(9000), false);
+  assert.equal(s.endsAt, 5000);
+});

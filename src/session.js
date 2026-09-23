@@ -88,6 +88,13 @@ export class LootSession {
     return true;
   }
 
+  /** Rollzeit ändern (nur solange gerollt werden kann). */
+  setDeadline(endsAt) {
+    if (!this.rollingOpen) return false;
+    this.endsAt = endsAt;
+    return true;
+  }
+
   #decide(userId) {
     if (this.closed) return { ok: false, reason: 'closed' };
     if (this.rollsLocked) return { ok: false, reason: 'locked' };

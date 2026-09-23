@@ -12,10 +12,11 @@ Es gibt zwei Kanäle:
 2. **„Wer darf rollen?“** erscheint direkt darunter. Der Leader wählt Spieler oder Rollen aus der **Liste**
    oder schreibt sie als `@Name` / `@Rolle` in den Leader-Kanal. `@Erwähnungen` im Item-Post werden direkt übernommen.
    Im zweiten Feld legt er fest, **wer die Verlosung verwaltet**: einzelne Leader, eine oder mehrere Leader-Rollen oder beides.
-   Er selbst verwaltet immer mit. Dann klickt er auf **📣 Posten & Spieler pingen**.
+   Er selbst verwaltet immer mit. Im dritten Feld wählt er die **Rollzeit** (1–72 Stunden, Vorgabe per `/einrichten`).
+   Dann klickt er auf **📣 Posten & Spieler pingen**.
 3. **Der Bot postet das Item mit Bild im Loot-Kanal** und öffnet daran einen **Thread** mit der Roll-Liste.
    Alle Ausgewählten werden im Thread angepingt. Bei einer Rolle wird jedes Mitglied einzeln angepingt.
-4. **Die Spieler haben 24 Stunden** (einstellbar). In der Zeit wählen sie, **wofür** sie rollen, und würfeln 1–100:
+4. **Die Spieler haben die gewählte Rollzeit**, Standard 24 Stunden. In der Zeit wählen sie, **wofür** sie rollen, und würfeln 1–100:
    ⭐ BiS-Item · 💧 Watermark Upgrade · 📜 Lithografie · 💰 Verkauf · ✨ Potential.
    Oder sie klicken **🚫 Passen**. Nur ausgewählte Spieler können würfeln.
 5. **Roll-Liste:** Die Würfe sind nach Grund gruppiert (BiS zuerst) und darin nach Höhe sortiert.
@@ -26,6 +27,7 @@ Es gibt zwei Kanäle:
    - 👑 **Gewinner auswählen**: Der Bot verkündet ihn im Thread und vermerkt ihn an der Item-Nachricht.
    - ➕ **Spieler oder Rollen hinzufügen** (während der Rollzeit).
    - ↩️ **Entscheidung zurücksetzen**, z. B. nach einem Fehlklick (während der Rollzeit).
+   - ⏰ **Rollzeit ändern**, gerechnet ab jetzt, z. B. „endet in 6 Stunden“.
    - ⏹️ **Rollen jetzt beenden** und **Ohne Gewinner schließen**.
 
 ## Rechte
@@ -42,7 +44,9 @@ Es gibt zwei Kanäle:
 - `/leader hinzufügen wer:@Name` oder `wer:@Rolle`: macht einen Spieler oder eine Rolle zum Loot-Leader.
 - `/leader entfernen wer:@Name`: entzieht die Leader-Rechte.
 - `/leader liste`: zeigt alle Loot-Leader.
-- `/einrichten leaderkanal:#loot-leitung lootkanal:#loot`: legt die Kanäle fest. Ohne Angaben zeigt der Befehl die aktuelle Einstellung.
+- `/einrichten leaderkanal:#loot-leitung lootkanal:#loot rollzeit:24`: legt die Kanäle und die Standard-Rollzeit in Stunden fest. Jede Angabe ist optional. Ohne Angaben zeigt der Befehl die aktuelle Einstellung.
+- `/loot offen`: zeigt allen Leadern die laufenden Verlosungen mit Link zu Thread und Panel.
+- `/hilfe`: gibt eine kurze Übersicht über Ablauf und Befehle.
 
 Die Befehle registriert der Bot beim Start automatisch auf jedem Server.
 
@@ -73,7 +77,7 @@ Voraussetzung: Node.js 22 oder neuer.
 | `DISCORD_TOKEN` | Bot-Token |
 | `LOOT_LEADER_CHANNEL_ID`, `LOOT_CHANNEL_ID` | Optional: Vorgabe für die Kanäle. `/einrichten` hat Vorrang |
 | `BOT_ADMIN_IDS` | Optional: zusätzliche Bot-Admins (Nutzer-IDs, kommagetrennt) |
-| `LOOT_ROLL_HOURS` | Optional: Rollzeit in Stunden, Standard 24 |
+| `LOOT_ROLL_HOURS` | Optional: Vorgabe für die Rollzeit in Stunden, Standard 24. `/einrichten rollzeit:` hat Vorrang |
 | `BOT_NAME` | Optional, Standard `Loot and Liberty` |
 | `DATA_FILE` | Optional, Standard `data/sessions.json`. Hier liegen offene Verlosungen, Leader und Kanal-Einstellungen |
 
@@ -89,7 +93,7 @@ npm test
 | `src/item.js` | Screenshot/Questlog-Link erkennen, Link-Vorschau |
 | `src/render.js` | Embeds, Auswahlmenüs, Buttons |
 | `src/bot.js` | Discord-Ablauf: Leader-Kanal, Auswahl, Item-Post + Thread, Rollzeit, Panel, Befehle |
-| `src/commands.js` | Slash-Commands `/leader` und `/einrichten` |
+| `src/commands.js` | Slash-Commands `/leader`, `/einrichten`, `/loot`, `/hilfe` |
 | `src/store.js` | Speichern von Verlosungen, Leadern und Kanälen als JSON |
 | `src/index.js` | Start, Intents, Konfiguration |
 

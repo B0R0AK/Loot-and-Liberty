@@ -1,7 +1,7 @@
 import { MessageFlags, PermissionFlagsBits } from 'discord.js';
 import { commands } from './commands.js';
 import { detectItem, fetchLinkPreview } from './item.js';
-import { lootPayload, panelView, pingChunks, promptView, starterContent } from './render.js';
+import { HELP_TEXT, hoursLabel, lootPayload, openSessionLine, panelView, pingChunks, promptView, starterContent } from './render.js';
 import { LootSession, purposeById } from './session.js';
 
 const DRAFT_TTL_MS = 30 * 60_000;
@@ -14,7 +14,7 @@ const HOUR = 3_600_000;
  *  3. Spieler würfeln/passen – bis die Rollzeit (24 h) abläuft oder der Leader früher beendet
  *  4. Leader wählt im Panel (Leader-Kanal) den Gewinner
  */
-export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 }) {
+export function createLootBot({ client, store, botAdminIds = [] }) {
   /** Gepostete Items, für die noch ausgewählt wird, wer rollen darf. Key = ID des Leader-Posts. */
   const drafts = new Map();
   /** Serialisierte Edits pro Nachricht, damit immer der neueste Stand zuletzt ankommt. */
@@ -111,6 +111,7 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
       item,
       selection: mentionsOf(message),
       managers: { users: [], roles: [] },
+      rollHours: cfg.rollHours,
       prompt: null,
     };
     drafts.set(draft.id, draft);
@@ -158,6 +159,11 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
       return interaction.update(promptView(draft));
     }
 
+    if (action === 'hours') {
+      draft.rollHours = Number(interaction.values[0]);
+      return interaction.update(promptView(draft));
+    }
+
     if (action === 'cancel') {
       drafts.delete(id);
       return interaction.update({ content: `Abgebrochen: **${draft.item.name}**`, embeds: [], components: [] });
@@ -192,7 +198,7 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
       channelId: lootChannel.id,
       panelChannelId: interaction.channelId,
       panelMessageId: interaction.message.id,
-      endsAt: Date.now() + rollHours * HOUR,
+      endsAt: Date.now() + draft.rollHours * HOUR,
     });
 
     // Das Bild wird neu hochgeladen, damit es dauerhaft sichtbar bleibt.
@@ -376,6 +382,18 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
       return lockRolls(session, 'leader');
     }
 
+    if (action === 'time') {
+      const hours = Number(interaction.values[0]);
+      if (!session.setDeadline(Date.now() + hours * HOUR)) return interaction.reply(ephemeral(REASON_TEXT.locked));
+      await interaction.deferUpdate();
+      store.save();
+      scheduleLock(session);
+      await render(session, { starter: true });
+      const thread = await channel(session.threadId);
+      await thread.send(`⏰ **Rollzeit geändert:** endet jetzt <t:${Math.floor(session.endsAt / 1000)}:R>.`);
+      return;
+    }
+
     if (action === 'reset') {
       const userId = interaction.values[0];
       const res = session.reset(userId);
@@ -447,11 +465,13 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
     }
     const leaderChannel = interaction.options.getChannel('leaderkanal');
     const lootChannel = interaction.options.getChannel('lootkanal');
+    const hours = interaction.options.getInteger('rollzeit');
     const cfg =
-      leaderChannel || lootChannel
+      leaderChannel || lootChannel || hours
         ? store.updateGuild(interaction.guildId, (c) => {
             if (leaderChannel) c.leaderChannelId = leaderChannel.id;
             if (lootChannel) c.lootChannelId = lootChannel.id;
+            if (hours) c.rollHours = hours;
           })
         : store.guild(interaction.guildId);
     const show = (id) => (id ? `<#${id}>` : '*nicht gesetzt*');
@@ -459,9 +479,18 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
       ephemeral(
         `**Leader-Kanal:** ${show(cfg.leaderChannelId)} – hier posten Leader Items\n` +
           `**Loot-Kanal:** ${show(cfg.lootChannelId)} – hier landen Item + Thread für die Spieler\n` +
-          `**Rollzeit:** ${rollHours} Stunden`,
+          `**Standard-Rollzeit:** ${hoursLabel(cfg.rollHours)} – pro Item im Fenster änderbar`,
       ),
     );
+  }
+
+  async function handleLootCommand(interaction) {
+    if (!isLeader(whoInteracts(interaction))) return interaction.reply(ephemeral('Nur Loot-Leader können das.'));
+    const open = store.openSessions(interaction.guildId);
+    if (!open.length) return interaction.reply(ephemeral('Gerade läuft keine Verlosung.'));
+    const lines = open.slice(0, 20).map(openSessionLine);
+    if (open.length > 20) lines.push(`… und ${open.length - 20} weitere`);
+    return interaction.reply(ephemeral(`**Laufende Verlosungen (${open.length})**\n${lines.join('\n')}`));
   }
 
   async function registerCommands(guild) {
@@ -475,6 +504,8 @@ export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 
       if (interaction.isChatInputCommand()) {
         if (interaction.commandName === 'leader') return await handleLeaderCommand(interaction);
         if (interaction.commandName === 'einrichten') return await handleSetupCommand(interaction);
+        if (interaction.commandName === 'loot') return await handleLootCommand(interaction);
+        if (interaction.commandName === 'hilfe') return await interaction.reply(ephemeral(HELP_TEXT));
         return;
       }
       if (!interaction.isMessageComponent()) return;
