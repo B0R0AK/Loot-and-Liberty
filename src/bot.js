@@ -248,8 +248,28 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     store.save();
     await render(session, { starter: true });
     const thread = await channel(session.threadId);
-    await thread.send(reason === 'timeout' ? '⏰ **Die Rollzeit ist vorbei.** Der Leader wählt jetzt den Gewinner.' : '⏹️ **Der Leader hat das Rollen beendet.** Der Gewinner wird gleich gewählt.');
+    await thread.send(
+      (reason === 'timeout' ? '⏰ **Die Rollzeit ist vorbei.**' : '⏹️ **Der Leader hat das Rollen beendet.**') +
+        ' Der Leader wählt jetzt den Gewinner. 🔒 Der Thread wird geschlossen – das Ergebnis steht danach hier und an der Item-Nachricht.',
+    );
+    await closeThread(thread);
     await notifyManagers(session, `⏹️ **${session.item.name}**: Rollen beendet – bitte Gewinner auswählen.`);
+  }
+
+  // ---------- Thread schließen/öffnen ----------
+  // Nach dem Rollen wird der Thread gesperrt und archiviert: Er verschwindet aus der
+  // Kanalliste und zählt nicht mehr zu den aktiven Threads. Für die Gewinner-Nachricht
+  // öffnet der Bot ihn kurz wieder (braucht das Recht „Threads verwalten“).
+
+  async function closeThread(thread) {
+    await thread.setLocked(true).catch((err) => console.error('Thread sperren fehlgeschlagen:', err.message));
+    await thread.setArchived(true).catch((err) => console.error('Thread archivieren fehlgeschlagen:', err.message));
+  }
+
+  async function reopenThread(session) {
+    const thread = await channel(session.threadId);
+    if (thread.archived) await thread.setArchived(false).catch((err) => console.error('Thread öffnen fehlgeschlagen:', err.message));
+    return thread;
   }
 
   /** Hinweis im Leader-Kanal an alle Verwalter der Verlosung. */
@@ -346,8 +366,8 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     clearTimeout(timers.get(session.id));
     store.delete(session.id);
     await interaction.deferUpdate();
+    const thread = await reopenThread(session);
     await render(session, { starter: true });
-    const thread = await channel(session.threadId);
     if (session.winnerId) {
       const p = session.participants.get(session.winnerId);
       await thread.send({
@@ -357,6 +377,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     } else {
       await thread.send('Verlosung ohne Gewinner geschlossen.');
     }
+    await closeThread(thread);
   }
 
   async function handlePanel(interaction, action, id) {

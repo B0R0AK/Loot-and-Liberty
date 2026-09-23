@@ -22,7 +22,8 @@ Es gibt zwei Kanäle:
 5. **Roll-Liste:** Die Würfe sind nach Grund gruppiert (BiS zuerst) und darin nach Höhe sortiert.
    Die Liste steht im Thread und im Leader-Panel.
 6. **Ende der Rollzeit:** nach 24 Stunden oder früher per **⏹️ Rollen jetzt beenden**.
-   Der Bot pingt dann die Verwalter im Leader-Kanal an.
+   Der Bot **sperrt und archiviert den Thread**, damit die Kanalliste aufgeräumt bleibt, und pingt die Verwalter im Leader-Kanal an.
+   Für die Gewinner-Nachricht öffnet er den Thread kurz und schließt ihn danach wieder.
 7. **Leader-Panel** im Leader-Kanal, nur für die Verwalter dieser Verlosung:
    - 👑 **Gewinner auswählen**: Der Bot verkündet ihn im Thread und vermerkt ihn an der Item-Nachricht.
    - ➕ **Spieler oder Rollen hinzufügen** (während der Rollzeit).
@@ -58,10 +59,11 @@ Voraussetzung: Node.js 22 oder neuer.
 2. Unter **Bot → Privileged Gateway Intents** aktivieren:
    - **Server Members Intent**: um alle Mitglieder einer Rolle zu finden.
    - **Message Content Intent**: um Screenshots, Links und @Erwähnungen im Leader-Kanal zu lesen.
-3. Den Bot mit den Scopes `bot` und `applications.commands` einladen.
+3. Den Bot mit den Scopes `bot` und `applications.commands` einladen. Dieser Link enthält alle nötigen Rechte (`DEINE_APP_ID` ersetzen):
+   `https://discord.com/oauth2/authorize?client_id=DEINE_APP_ID&scope=bot+applications.commands&permissions=326417632320`
 4. Zwei Kanäle anlegen: `#loot-leitung` (nur Leader) und `#loot` (alle). Der Bot braucht diese Rechte:
    - **`#loot-leitung`**: Kanal ansehen, Nachrichten senden, Links einbetten, Nachrichtenverlauf lesen, Reaktionen hinzufügen.
-   - **`#loot`**: Kanal ansehen, Nachrichten senden, Dateien anhängen, Links einbetten, Öffentliche Threads erstellen, Nachrichten in Threads senden.
+   - **`#loot`**: Kanal ansehen, Nachrichten senden, Dateien anhängen, Links einbetten, Öffentliche Threads erstellen, Nachrichten in Threads senden, **Threads verwalten** (zum Schließen der Threads).
 5. Starten:
    ```bash
    cp .env.example .env   # DISCORD_TOKEN eintragen
