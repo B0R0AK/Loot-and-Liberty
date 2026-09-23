@@ -5,7 +5,7 @@ import { LootSession, purposeById } from './session.js';
 
 const DRAFT_TTL_MS = 30 * 60_000;
 
-export function createLootBot({ client, store, lootChannelIds = [], leaderRoleIds = [] }) {
+export function createLootBot({ client, store, lootChannelIds = [], leaderRoleIds = [], managerIds = [] }) {
   /** Gepostete Items, für die noch ausgewählt wird, wer rollen darf. Key = ID der Item-Nachricht. */
   const drafts = new Map();
   /** Serialisierte Edits pro Verlosung, damit immer der neueste Stand zuletzt ankommt. */
@@ -24,9 +24,15 @@ export function createLootBot({ client, store, lootChannelIds = [], leaderRoleId
     return leaderRoleIds.some((id) => member?.roles?.cache?.has(id));
   }
 
-  /** Ersteller der Verlosung oder Moderator (Nachrichten verwalten). */
+  /**
+   * Ersteller der Verlosung oder explizit freigegebene Nutzer/Rollen (LOOT_MANAGER_IDS).
+   * Discord-Berechtigungen wie „Nachrichten verwalten“ oder Admin zählen bewusst nicht.
+   */
   function mayManage(interaction, ownerId) {
-    return interaction.user.id === ownerId || Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages));
+    if (interaction.user.id === ownerId || managerIds.includes(interaction.user.id)) return true;
+    const roles = interaction.member?.roles;
+    const roleIds = Array.isArray(roles) ? roles : [...(roles?.cache?.keys() ?? [])];
+    return roleIds.some((id) => managerIds.includes(id));
   }
 
   function mentionsOf(message) {

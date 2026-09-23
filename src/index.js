@@ -37,6 +37,7 @@ const bot = createLootBot({
   store,
   lootChannelIds,
   leaderRoleIds: list(process.env.LOOT_LEADER_ROLE_IDS),
+  managerIds: list(process.env.LOOT_MANAGER_IDS),
 });
 
 client.once(Events.ClientReady, async (c) => {

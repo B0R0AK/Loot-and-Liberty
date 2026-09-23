@@ -26,7 +26,7 @@ Discord-Bot, der das Verteilen von Loot in **Throne and Liberty** einfacher mach
    Der Bot verkündet ihn im Thread und vermerkt ihn im Loot-Kanal.
    Alternativ: **Ohne Gewinner schließen**.
 
-Den Gewinner auswählen oder die Verlosung schließen dürfen der Ersteller und Moderatoren mit der Berechtigung *Nachrichten verwalten*.
+Den Gewinner auswählen oder die Verlosung schließen darf **nur der Ersteller** und wer explizit in `LOOT_MANAGER_IDS` eingetragen ist (Nutzer- oder Rollen-IDs). Discord-Rechte wie *Nachrichten verwalten* oder *Administrator* reichen dafür nicht.
 
 ## Einrichtung
 
@@ -54,6 +54,7 @@ Voraussetzung: Node.js 22 oder neuer.
 | `DISCORD_TOKEN` | Bot-Token |
 | `LOOT_CHANNEL_IDS` | ID(s) der Loot-Kanäle, kommagetrennt |
 | `LOOT_LEADER_ROLE_IDS` | Optional: nur diese Rollen (und Admins) dürfen Loot posten. Leer = jeder im Kanal |
+| `LOOT_MANAGER_IDS` | Optional: Nutzer- und/oder Rollen-IDs, die bei jeder Verlosung den Gewinner wählen oder schließen dürfen. Leer = nur der Ersteller |
 | `BOT_NAME` | Optional, Standard `Loot and Liberty` |
 | `DATA_FILE` | Optional, Standard `data/sessions.json`. Hier werden offene Verlosungen gespeichert, damit sie einen Neustart überleben |
 
