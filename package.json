@@ -1,0 +1,19 @@
+{
+  "name": "loot-and-liberty",
+  "version": "0.1.0",
+  "description": "Discord-Bot zur Loot-Verteilung für Throne and Liberty",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "deploy": "node --env-file-if-exists=.env src/deploy-commands.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.27.0"
+  }
+}
