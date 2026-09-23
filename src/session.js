@@ -42,6 +42,9 @@ export class LootSession {
     this.channelId = rest.channelId ?? null;
     this.threadId = rest.threadId ?? null;
     this.messageId = rest.messageId ?? null;
+    this.starterMessageId = rest.starterMessageId ?? null;
+    this.endsAt = rest.endsAt ?? null;
+    this.rollsLocked = rest.rollsLocked ?? false;
     this.panelChannelId = rest.panelChannelId ?? null;
     this.panelMessageId = rest.panelMessageId ?? null;
     this.sourceUrl = rest.sourceUrl ?? null;
@@ -62,8 +65,21 @@ export class LootSession {
     return this.names[userId] ?? userId;
   }
 
+  /** Rollen noch möglich? (nicht geschlossen, nicht beendet, Zeit nicht abgelaufen) */
+  get rollingOpen() {
+    return !this.closed && !this.rollsLocked;
+  }
+
+  /** Rollzeit beenden (Ablauf der Frist oder Leader beendet früher). Gewinner wird danach gewählt. */
+  lockRolls() {
+    if (!this.rollingOpen) return false;
+    this.rollsLocked = true;
+    return true;
+  }
+
   #decide(userId) {
     if (this.closed) return { ok: false, reason: 'closed' };
+    if (this.rollsLocked) return { ok: false, reason: 'locked' };
     const p = this.participants.get(userId);
     if (!p) return { ok: false, reason: 'not-eligible' };
     if (p.status !== Status.PENDING) return { ok: false, reason: 'already', participant: p };
@@ -88,6 +104,7 @@ export class LootSession {
   /** Leader setzt eine Entscheidung zurück – der Spieler kann neu wählen. */
   reset(userId) {
     if (this.closed) return { ok: false, reason: 'closed' };
+    if (this.rollsLocked) return { ok: false, reason: 'locked' };
     const p = this.participants.get(userId);
     if (!p) return { ok: false, reason: 'not-eligible' };
     if (p.status === Status.PENDING) return { ok: false, reason: 'still-pending' };
@@ -97,7 +114,7 @@ export class LootSession {
 
   /** Nachträglich Spieler hinzufügen. Gibt die wirklich neuen IDs zurück. */
   addParticipants(ids, names = {}) {
-    if (this.closed) return [];
+    if (!this.rollingOpen) return [];
     const added = ids.filter((id) => !this.participants.has(id));
     for (const id of added) this.participants.set(id, { status: Status.PENDING, roll: null, purpose: null, at: null });
     Object.assign(this.names, names);

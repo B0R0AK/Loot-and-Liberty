@@ -1,45 +1,52 @@
-import { ChannelType, MessageFlags, PermissionFlagsBits } from 'discord.js';
+import { MessageFlags, PermissionFlagsBits } from 'discord.js';
+import { commands } from './commands.js';
 import { detectItem, fetchLinkPreview } from './item.js';
-import { lootPayload, panelView, pingChunks, promptView } from './render.js';
+import { lootPayload, panelView, pingChunks, promptView, starterContent } from './render.js';
 import { LootSession, purposeById } from './session.js';
 
 const DRAFT_TTL_MS = 30 * 60_000;
+const HOUR = 3_600_000;
 
 /**
  * Ablauf:
- *  1. Item-Post im Loot-Kanal  →  Panel „Wer darf rollen?“ im Leader-Kanal
- *  2. Leader wählt aus          →  Thread am Item-Post mit Roll-Liste + Pings
- *  3. Spieler würfeln/passen    →  Liste im Thread und Panel aktualisieren sich
- *  4. Leader im Panel: Gewinner wählen, zurücksetzen, hinzufügen, schließen
+ *  1. Leader postet Screenshot/Questlog-Link im Leader-Kanal → darunter „Wer darf rollen?“
+ *  2. Leader wählt aus → Bot postet das Item mit Bild im Loot-Kanal, Thread mit Roll-Liste, Pings
+ *  3. Spieler würfeln/passen – bis die Rollzeit (24 h) abläuft oder der Leader früher beendet
+ *  4. Leader wählt im Panel (Leader-Kanal) den Gewinner
  */
-export function createLootBot({ client, store, lootChannelIds = [], leaderChannelId = null, leaderRoleIds = [], managerIds = [] }) {
-  /** Gepostete Items, für die noch ausgewählt wird, wer rollen darf. Key = ID der Item-Nachricht. */
+export function createLootBot({ client, store, botAdminIds = [], rollHours = 24 }) {
+  /** Gepostete Items, für die noch ausgewählt wird, wer rollen darf. Key = ID des Leader-Posts. */
   const drafts = new Map();
   /** Serialisierte Edits pro Nachricht, damit immer der neueste Stand zuletzt ankommt. */
   const editChains = new Map();
+  /** Timer für das Ende der Rollzeit. */
+  const timers = new Map();
 
-  const ephemeral = (content) => ({ content, flags: MessageFlags.Ephemeral });
+  const ephemeral = (content) => ({ content, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
 
-  const isLootChannel = (channel) => channel?.type === ChannelType.GuildText && lootChannelIds.includes(channel.id);
-  const isPanelChannel = (channel) => (leaderChannelId ? channel?.id === leaderChannelId : isLootChannel(channel));
+  // ---------- Rechte ----------
 
-  /** Darf dieses Mitglied Loot posten? Ohne konfigurierte Rollen: jeder im Loot-Kanal. */
-  function mayPostLoot(member) {
-    if (!leaderRoleIds.length) return true;
-    if (member?.permissions?.has(PermissionFlagsBits.Administrator)) return true;
-    return leaderRoleIds.some((id) => member?.roles?.cache?.has(id));
+  const roleIdsOf = (member) => {
+    const roles = member?.roles;
+    return Array.isArray(roles) ? roles : [...(roles?.cache?.keys() ?? [])];
+  };
+
+  /** Bot-Admin: Server-Besitzer, Discord-Administrator oder in BOT_ADMIN_IDS. Darf Leader festlegen. */
+  function isBotAdmin({ userId, guild, permissions }) {
+    return botAdminIds.includes(userId) || guild?.ownerId === userId || Boolean(permissions?.has(PermissionFlagsBits.Administrator));
   }
 
-  /**
-   * Ersteller der Verlosung oder explizit freigegebene Nutzer/Rollen (LOOT_MANAGER_IDS).
-   * Discord-Berechtigungen wie „Nachrichten verwalten“ oder Admin zählen bewusst nicht.
-   */
-  function mayManage(interaction, ownerId) {
-    if (interaction.user.id === ownerId || managerIds.includes(interaction.user.id)) return true;
-    const roles = interaction.member?.roles;
-    const roleIds = Array.isArray(roles) ? roles : [...(roles?.cache?.keys() ?? [])];
-    return roleIds.some((id) => managerIds.includes(id));
+  /** Leader: per /leader festgelegte Nutzer oder Rollen (plus Bot-Admins). */
+  function isLeader({ userId, guild, permissions, member }) {
+    if (isBotAdmin({ userId, guild, permissions })) return true;
+    const { leaders } = store.guild(guild.id);
+    return leaders.users.includes(userId) || roleIdsOf(member).some((id) => leaders.roles.includes(id));
   }
+
+  const whoInteracts = (i) => ({ userId: i.user.id, guild: i.guild, permissions: i.memberPermissions, member: i.member });
+  const whoWrote = (m) => ({ userId: m.author.id, guild: m.guild, permissions: m.member?.permissions, member: m.member });
+
+  // ---------- Hilfen ----------
 
   function mentionsOf(message) {
     return {
@@ -49,88 +56,6 @@ export function createLootBot({ client, store, lootChannelIds = [], leaderChanne
   }
 
   const union = (a, b) => [...new Set([...a, ...b])].slice(0, 100);
-
-  async function panelChannelFor(message) {
-    if (!leaderChannelId) return message.channel;
-    return client.channels.fetch(leaderChannelId);
-  }
-
-  // ---------- 1. Item im Loot-Kanal erkennen ----------
-
-  async function onMessage(message) {
-    if (message.author.bot) return;
-    const inLoot = isLootChannel(message.channel);
-    if (!inLoot && !isPanelChannel(message.channel)) return;
-
-    const item = inLoot
-      ? detectItem({
-          content: message.content,
-          attachments: [...message.attachments.values()].map((a) => ({ url: a.url, contentType: a.contentType })),
-        })
-      : null;
-
-    if (!item) return addMentionsToDraft(message);
-
-    if (!mayPostLoot(message.member)) {
-      const r = await message.reply('Nur Leader dürfen hier Loot posten.');
-      setTimeout(() => r.delete().catch(() => {}), 10_000);
-      return;
-    }
-
-    if (item.url && (!item.nameFromInput || !item.image)) {
-      const preview = await fetchLinkPreview(item.url);
-      if (!item.nameFromInput && preview.title) item.name = preview.title.slice(0, 90);
-      item.image ??= preview.image ?? null;
-    }
-
-    const draft = {
-      id: message.id,
-      authorId: message.author.id,
-      channelId: message.channelId,
-      sourceUrl: message.url,
-      item,
-      selection: mentionsOf(message),
-      prompt: null,
-    };
-    drafts.set(draft.id, draft);
-
-    const panelChannel = await panelChannelFor(message);
-    draft.prompt = await panelChannel.send({ ...promptView(draft), allowedMentions: { users: [draft.authorId] } });
-    await message.react('⏳').catch(() => {});
-
-    setTimeout(async () => {
-      if (drafts.get(draft.id) !== draft) return;
-      drafts.delete(draft.id);
-      await draft.prompt.edit({ content: '⌛ Abgelaufen – poste das Item einfach neu.', embeds: [], components: [] }).catch(() => {});
-      await message.reactions.cache.get('⏳')?.users.remove(client.user.id).catch(() => {});
-    }, DRAFT_TTL_MS).unref();
-  }
-
-  /** Nachtrag „@Name @Rolle“ im Leader-Kanal (oder Loot-Kanal) für das offene Item desselben Users. */
-  async function addMentionsToDraft(message) {
-    const m = mentionsOf(message);
-    if (!m.users.length && !m.roles.length) return;
-    const draft = [...drafts.values()].reverse().find((d) => d.authorId === message.author.id && d.prompt?.channelId === message.channelId);
-    if (!draft) return;
-    draft.selection = { users: union(draft.selection.users, m.users), roles: union(draft.selection.roles, m.roles) };
-    await draft.prompt.edit(promptView(draft)).catch((err) => console.error('Panel-Update fehlgeschlagen:', err.message));
-    await message.react('✅').catch(() => {});
-  }
-
-  // ---------- 2. Auswahl, wer rollen darf ----------
-
-  async function getDraft(interaction, id) {
-    const draft = drafts.get(id);
-    if (!draft) {
-      await interaction.update({ content: '⌛ Abgelaufen – poste das Item einfach neu.', embeds: [], components: [] });
-      return null;
-    }
-    if (!mayManage(interaction, draft.authorId)) {
-      await interaction.reply(ephemeral(`Nur <@${draft.authorId}> kann das auswählen.`));
-      return null;
-    }
-    return draft;
-  }
 
   async function resolveMembers(guild, { users, roles }) {
     const members = new Map();
@@ -146,10 +71,71 @@ export function createLootBot({ client, store, lootChannelIds = [], leaderChanne
   }
 
   const namesOf = (members) => Object.fromEntries([...members.values()].map((m) => [m.id, m.displayName]));
+  const channel = (id) => client.channels.fetch(id);
+
+  // ---------- 1. Item im Leader-Kanal erkennen ----------
+
+  async function onMessage(message) {
+    if (message.author.bot || !message.guild) return;
+    const cfg = store.guild(message.guild.id);
+    if (!cfg.leaderChannelId || message.channelId !== cfg.leaderChannelId) return;
+
+    const item = detectItem({
+      content: message.content,
+      attachments: [...message.attachments.values()].map((a) => ({ url: a.url, contentType: a.contentType })),
+    });
+    if (!item) return addMentionsToDraft(message);
+
+    if (!isLeader(whoWrote(message))) {
+      return message.reply({ content: 'Nur Loot-Leader können Items verlosen. Ein Bot-Admin kann dich mit `/leader hinzufügen` freischalten.', allowedMentions: { parse: [] } });
+    }
+    if (!cfg.lootChannelId) {
+      return message.reply('Es ist noch kein Loot-Kanal eingerichtet. Ein Bot-Admin kann das mit `/einrichten lootkanal:#kanal` tun.');
+    }
+
+    if (item.url && (!item.nameFromInput || !item.image)) {
+      const preview = await fetchLinkPreview(item.url);
+      if (!item.nameFromInput && preview.title) item.name = preview.title.slice(0, 90);
+      item.image ??= preview.image ?? null;
+    }
+
+    const draft = {
+      id: message.id,
+      authorId: message.author.id,
+      lootChannelId: cfg.lootChannelId,
+      item,
+      selection: mentionsOf(message),
+      prompt: null,
+    };
+    drafts.set(draft.id, draft);
+    draft.prompt = await message.reply({ ...promptView(draft), allowedMentions: { parse: [] } });
+
+    setTimeout(async () => {
+      if (drafts.get(draft.id) !== draft) return;
+      drafts.delete(draft.id);
+      await draft.prompt.edit({ content: '⌛ Abgelaufen – poste das Item einfach neu.', embeds: [], components: [] }).catch(() => {});
+    }, DRAFT_TTL_MS).unref();
+  }
+
+  /** Nachtrag „@Name @Rolle“ im Leader-Kanal für das offene Item desselben Leaders. */
+  async function addMentionsToDraft(message) {
+    const m = mentionsOf(message);
+    if (!m.users.length && !m.roles.length) return;
+    const draft = [...drafts.values()].reverse().find((d) => d.authorId === message.author.id && d.prompt?.channelId === message.channelId);
+    if (!draft) return;
+    draft.selection = { users: union(draft.selection.users, m.users), roles: union(draft.selection.roles, m.roles) };
+    await draft.prompt.edit(promptView(draft)).catch((err) => console.error('Update fehlgeschlagen:', err.message));
+    await message.react('✅').catch(() => {});
+  }
+
+  // ---------- 2. Auswahl, wer rollen darf ----------
 
   async function handleDraft(interaction, action, id) {
-    const draft = await getDraft(interaction, id);
-    if (!draft) return;
+    const draft = drafts.get(id);
+    if (!draft) {
+      return interaction.update({ content: '⌛ Abgelaufen – poste das Item einfach neu.', embeds: [], components: [] });
+    }
+    if (!isLeader(whoInteracts(interaction))) return interaction.reply(ephemeral('Nur Loot-Leader können das.'));
 
     if (action === 'select') {
       draft.selection = { roles: [...interaction.roles.keys()], users: [...interaction.users.keys()] };
@@ -158,10 +144,7 @@ export function createLootBot({ client, store, lootChannelIds = [], leaderChanne
 
     if (action === 'cancel') {
       drafts.delete(id);
-      await interaction.update({ content: `Abgebrochen: **${draft.item.name}**`, embeds: [], components: [] });
-      const source = await fetchSource(draft);
-      await source?.reactions.cache.get('⏳')?.users.remove(client.user.id).catch(() => {});
-      return;
+      return interaction.update({ content: `Abgebrochen: **${draft.item.name}**`, embeds: [], components: [] });
     }
 
     if (action === 'start') {
@@ -173,22 +156,15 @@ export function createLootBot({ client, store, lootChannelIds = [], leaderChanne
     }
   }
 
-  async function fetchSource(draft) {
-    const channel = await client.channels.fetch(draft.channelId).catch(() => null);
-    return channel?.messages.fetch(draft.id).catch(() => null);
+  // ---------- 3. Item im Loot-Kanal posten, Thread, Pings ----------
+
+  function imageFile(url) {
+    const ext = url.split('?')[0].match(/\.(png|jpe?g|gif|webp)$/i)?.[1] ?? 'png';
+    return { attachment: url, name: `item.${ext.toLowerCase()}` };
   }
 
-  // ---------- 3. Thread erstellen und anpingen ----------
-
   async function startLoot(interaction, draft, members) {
-    const source = await fetchSource(draft);
-    if (!source) {
-      return interaction.editReply({ content: '⚠️ Der Item-Post wurde gelöscht.', embeds: [], components: [] });
-    }
-    const thread = source.hasThread
-      ? source.thread
-      : await source.startThread({ name: `🎲 ${draft.item.name}`.slice(0, 100), autoArchiveDuration: 1440 });
-
+    const lootChannel = await channel(draft.lootChannelId);
     const session = new LootSession({
       id: draft.id,
       ownerId: draft.authorId,
@@ -196,30 +172,69 @@ export function createLootBot({ client, store, lootChannelIds = [], leaderChanne
       eligibleIds: [...members.keys()],
       names: namesOf(members),
       guildId: interaction.guildId,
-      channelId: draft.channelId,
-      threadId: thread.id,
+      channelId: lootChannel.id,
       panelChannelId: interaction.channelId,
       panelMessageId: interaction.message.id,
-      sourceUrl: draft.sourceUrl,
+      endsAt: Date.now() + rollHours * HOUR,
     });
 
+    // Das Bild wird neu hochgeladen, damit es dauerhaft sichtbar bleibt.
+    const base = { content: starterContent(session), allowedMentions: { parse: [] } };
+    const starter = draft.item.image
+      ? await lootChannel.send({ ...base, files: [imageFile(draft.item.image)] }).catch(() => lootChannel.send(base))
+      : await lootChannel.send(base);
+    const thread = await starter.startThread({ name: `🎲 ${draft.item.name}`.slice(0, 100), autoArchiveDuration: 4320 });
+
+    session.starterMessageId = starter.id;
+    session.threadId = thread.id;
     const main = await thread.send(lootPayload(session));
     session.messageId = main.id;
     store.set(session);
+    scheduleLock(session);
 
-    await pingPlayers(thread, session, [...members.keys()], `🎲 **${session.item.name}** – ihr dürft rollen! `);
+    await pingPlayers(thread, [...members.keys()], `🎲 **${session.item.name}** – ihr dürft rollen! `);
     await interaction.editReply(panelView(session));
-    await source.reactions.cache.get('⏳')?.users.remove(client.user.id).catch(() => {});
-    await source.react('🎲').catch(() => {});
   }
 
-  async function pingPlayers(thread, session, ids, prefix) {
+  async function pingPlayers(thread, ids, prefix) {
     for (const content of pingChunks(ids, prefix)) {
       await thread.send({ content, allowedMentions: { users: ids } });
     }
   }
 
-  // ---------- 4. Spieler: Würfeln und Passen (Thread) ----------
+  // ---------- Rollzeit ----------
+
+  function scheduleLock(session) {
+    clearTimeout(timers.get(session.id));
+    if (!session.rollingOpen || !session.endsAt) return;
+    const delay = Math.max(0, session.endsAt - Date.now());
+    timers.set(
+      session.id,
+      setTimeout(() => lockRolls(session, 'timeout').catch((err) => console.error('Rollzeit-Ende fehlgeschlagen:', err)), delay),
+    );
+  }
+
+  /** Nach einem Neustart die Timer der offenen Verlosungen wieder starten. */
+  function restoreTimers() {
+    for (const session of store.sessions.values()) scheduleLock(session);
+  }
+
+  async function lockRolls(session, reason) {
+    if (!session.lockRolls()) return;
+    clearTimeout(timers.get(session.id));
+    store.save();
+    await render(session, { starter: true });
+    const thread = await channel(session.threadId);
+    await thread.send(reason === 'timeout' ? '⏰ Die Rollzeit ist vorbei. Der Leader wählt jetzt den Gewinner.' : '⏹️ Der Leader hat das Rollen beendet.');
+    const panel = await channel(session.panelChannelId);
+    await panel.send({
+      content: `⏹️ **${session.item.name}**: Rollen beendet. <@${session.ownerId}>, bitte wähle den Gewinner aus.`,
+      reply: { messageReference: session.panelMessageId, failIfNotExists: false },
+      allowedMentions: { users: [session.ownerId] },
+    });
+  }
+
+  // ---------- Darstellung ----------
 
   function queueEdit(key, fn) {
     const next = (editChains.get(key) ?? Promise.resolve())
@@ -229,22 +244,28 @@ export function createLootBot({ client, store, lootChannelIds = [], leaderChanne
     return next;
   }
 
-  /** Thread-Liste und Leader-Panel neu zeichnen. */
-  function render(session) {
-    return Promise.all([
-      queueEdit(`thread:${session.id}`, async () => {
-        const thread = await client.channels.fetch(session.threadId);
-        await thread.messages.edit(session.messageId, lootPayload(session));
-      }),
-      queueEdit(`panel:${session.id}`, async () => {
-        const channel = await client.channels.fetch(session.panelChannelId);
-        await channel.messages.edit(session.panelMessageId, panelView(session));
-      }),
-    ]);
+  /** Roll-Liste im Thread, Leader-Panel und (bei Statuswechsel) die Item-Nachricht neu zeichnen. */
+  function render(session, { starter = false } = {}) {
+    const jobs = [
+      queueEdit(`thread:${session.id}`, async () => (await channel(session.threadId)).messages.edit(session.messageId, lootPayload(session))),
+      queueEdit(`panel:${session.id}`, async () => (await channel(session.panelChannelId)).messages.edit(session.panelMessageId, panelView(session))),
+    ];
+    if (starter) {
+      jobs.push(
+        queueEdit(`starter:${session.id}`, async () =>
+          (await channel(session.channelId)).messages.edit(session.starterMessageId, {
+            content: starterContent(session),
+            allowedMentions: { parse: [] },
+          }),
+        ),
+      );
+    }
+    return Promise.all(jobs);
   }
 
   const REASON_TEXT = {
     closed: 'Diese Verlosung ist bereits beendet.',
+    locked: 'Die Rollzeit ist vorbei.',
     'not-eligible': 'Du wurdest für dieses Item nicht ausgewählt und kannst nicht würfeln.',
     'bad-purpose': 'Unbekannte Auswahl.',
     'not-rolled': 'Dieser Spieler hat nicht gewürfelt.',
@@ -259,13 +280,15 @@ export function createLootBot({ client, store, lootChannelIds = [], leaderChanne
       : 'Du hast bereits gepasst.';
   }
 
+  // ---------- 4. Spieler: Würfeln und Passen (Thread) ----------
+
   async function afterDecision(session) {
     store.save();
     await render(session);
     if (session.allDecided) {
-      const channel = await client.channels.fetch(session.panelChannelId);
-      await channel.send({
-        content: `✅ **${session.item.name}**: Alle haben entschieden. <@${session.ownerId}>, bitte wähle den Gewinner aus.`,
+      const panel = await channel(session.panelChannelId);
+      await panel.send({
+        content: `✅ **${session.item.name}**: Alle haben entschieden. <@${session.ownerId}>, du kannst den Gewinner auswählen.`,
         reply: { messageReference: session.panelMessageId, failIfNotExists: false },
         allowedMentions: { users: [session.ownerId] },
       });
@@ -295,10 +318,11 @@ export function createLootBot({ client, store, lootChannelIds = [], leaderChanne
   // ---------- 5. Leader-Panel ----------
 
   async function finish(interaction, session) {
+    clearTimeout(timers.get(session.id));
     store.delete(session.id);
     await interaction.deferUpdate();
-    await render(session);
-    const thread = await client.channels.fetch(session.threadId);
+    await render(session, { starter: true });
+    const thread = await channel(session.threadId);
     if (session.winnerId) {
       const p = session.participants.get(session.winnerId);
       await thread.send({
@@ -308,16 +332,12 @@ export function createLootBot({ client, store, lootChannelIds = [], leaderChanne
     } else {
       await thread.send('Verlosung ohne Gewinner geschlossen.');
     }
-    const source = await fetchSource({ channelId: session.channelId, id: session.id });
-    await source?.react(session.winnerId ? '🏆' : '✖️').catch(() => {});
   }
 
   async function handlePanel(interaction, action, id) {
     const session = store.get(id);
     if (!session) return interaction.reply(ephemeral('Diese Verlosung ist nicht mehr aktiv.'));
-    if (!mayManage(interaction, session.ownerId)) {
-      return interaction.reply(ephemeral(`Nur <@${session.ownerId}> kann diese Verlosung verwalten.`));
-    }
+    if (!isLeader(whoInteracts(interaction))) return interaction.reply(ephemeral('Nur Loot-Leader können das.'));
 
     if (action === 'winner') {
       const res = session.chooseWinner(interaction.values[0]);
@@ -330,6 +350,11 @@ export function createLootBot({ client, store, lootChannelIds = [], leaderChanne
       return finish(interaction, session);
     }
 
+    if (action === 'lock') {
+      await interaction.deferUpdate();
+      return lockRolls(session, 'leader');
+    }
+
     if (action === 'reset') {
       const userId = interaction.values[0];
       const res = session.reset(userId);
@@ -337,7 +362,7 @@ export function createLootBot({ client, store, lootChannelIds = [], leaderChanne
       await interaction.deferUpdate();
       store.save();
       await render(session);
-      const thread = await client.channels.fetch(session.threadId);
+      const thread = await channel(session.threadId);
       await thread.send({
         content: `↩️ <@${userId}>, deine Entscheidung wurde vom Leader zurückgesetzt – du kannst neu wählen.`,
         allowedMentions: { users: [userId] },
@@ -352,26 +377,93 @@ export function createLootBot({ client, store, lootChannelIds = [], leaderChanne
         roles: [...interaction.roles.keys()],
       });
       const added = session.addParticipants([...members.keys()], namesOf(members));
-      if (!added.length) return interaction.followUp(ephemeral('Alle Ausgewählten sind schon dabei.'));
+      if (!added.length) return interaction.followUp(ephemeral('Alle Ausgewählten sind schon dabei (oder die Rollzeit ist vorbei).'));
       store.save();
       await render(session);
-      const thread = await client.channels.fetch(session.threadId);
-      await pingPlayers(thread, session, added, `➕ Nachträglich dabei bei **${session.item.name}**: `);
+      await pingPlayers(await channel(session.threadId), added, `➕ Nachträglich dabei bei **${session.item.name}**: `);
     }
+  }
+
+  // ---------- Slash-Commands: /leader, /einrichten ----------
+
+  async function handleLeaderCommand(interaction) {
+    const sub = interaction.options.getSubcommand();
+    const guildId = interaction.guildId;
+
+    if (sub === 'liste') {
+      const { leaders } = store.guild(guildId);
+      const list = [...leaders.roles.map((id) => `<@&${id}>`), ...leaders.users.map((id) => `<@${id}>`)];
+      return interaction.reply(
+        ephemeral(
+          `**Loot-Leader:** ${list.length ? list.join(', ') : '*noch keine*'}\n` +
+            '*Bot-Admins (Server-Besitzer und Administratoren) haben immer Leader-Rechte.*',
+        ),
+      );
+    }
+
+    if (!isBotAdmin(whoInteracts(interaction))) {
+      return interaction.reply(ephemeral('Nur Bot-Admins (Server-Besitzer oder Administratoren) können Leader festlegen.'));
+    }
+
+    const opt = interaction.options.get('wer', true);
+    const kind = opt.role ? 'roles' : 'users';
+    const targetId = opt.role?.id ?? opt.user?.id;
+    const label = opt.role ? `<@&${targetId}>` : `<@${targetId}>`;
+    if (opt.user?.bot) return interaction.reply(ephemeral('Bots können keine Leader sein.'));
+    if (targetId === interaction.guildId) return interaction.reply(ephemeral('@everyone kann kein Leader sein.'));
+
+    const add = sub === 'hinzufügen';
+    const changed = store.setLeader(guildId, kind, targetId, add);
+    const text = add
+      ? changed ? `✅ ${label} ist jetzt Loot-Leader.` : `${label} ist bereits Loot-Leader.`
+      : changed ? `✅ ${label} ist kein Loot-Leader mehr.` : `${label} war kein Loot-Leader.`;
+    return interaction.reply(ephemeral(text));
+  }
+
+  async function handleSetupCommand(interaction) {
+    if (!isBotAdmin(whoInteracts(interaction))) {
+      return interaction.reply(ephemeral('Nur Bot-Admins (Server-Besitzer oder Administratoren) können das.'));
+    }
+    const leaderChannel = interaction.options.getChannel('leaderkanal');
+    const lootChannel = interaction.options.getChannel('lootkanal');
+    const cfg =
+      leaderChannel || lootChannel
+        ? store.updateGuild(interaction.guildId, (c) => {
+            if (leaderChannel) c.leaderChannelId = leaderChannel.id;
+            if (lootChannel) c.lootChannelId = lootChannel.id;
+          })
+        : store.guild(interaction.guildId);
+    const show = (id) => (id ? `<#${id}>` : '*nicht gesetzt*');
+    return interaction.reply(
+      ephemeral(
+        `**Leader-Kanal:** ${show(cfg.leaderChannelId)} – hier posten Leader Items\n` +
+          `**Loot-Kanal:** ${show(cfg.lootChannelId)} – hier landen Item + Thread für die Spieler\n` +
+          `**Rollzeit:** ${rollHours} Stunden`,
+      ),
+    );
+  }
+
+  async function registerCommands(guild) {
+    await guild.commands.set(commands.map((c) => c.toJSON())).catch((err) => console.error(`Commands für ${guild.name} fehlgeschlagen:`, err.message));
   }
 
   // ---------- Routing ----------
 
   async function onInteraction(interaction) {
-    if (!interaction.isMessageComponent()) return;
     try {
+      if (interaction.isChatInputCommand()) {
+        if (interaction.commandName === 'leader') return await handleLeaderCommand(interaction);
+        if (interaction.commandName === 'einrichten') return await handleSetupCommand(interaction);
+        return;
+      }
+      if (!interaction.isMessageComponent()) return;
       const [scope, action, id] = interaction.customId.split(':');
       if (scope === 'draft') return await handleDraft(interaction, action, id);
       if (scope === 'loot') return await handleLoot(interaction, action, id);
       if (scope === 'panel') return await handlePanel(interaction, action, id);
     } catch (err) {
       console.error('Fehler bei Interaction:', err);
-      const msg = ephemeral('❌ Da ist etwas schiefgelaufen. Hat der Bot die nötigen Rechte (Threads, Nachrichten)?');
+      const msg = ephemeral('❌ Da ist etwas schiefgelaufen. Hat der Bot die nötigen Rechte (Threads, Nachrichten, Dateien)?');
       if (interaction.deferred || interaction.replied) await interaction.followUp(msg).catch(() => {});
       else await interaction.reply(msg).catch(() => {});
     }
@@ -385,5 +477,5 @@ export function createLootBot({ client, store, lootChannelIds = [], leaderChanne
     }
   }
 
-  return { onMessage: safeOnMessage, onInteraction, drafts };
+  return { onMessage: safeOnMessage, onInteraction, registerCommands, restoreTimers, drafts };
 }

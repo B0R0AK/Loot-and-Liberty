@@ -35,10 +35,10 @@ function itemEmbed(item, color, { image = true } = {}) {
 export function promptView(draft) {
   const { users, roles } = draft.selection;
   const picked = [...roles.map((id) => `<@&${id}>`), ...users.map((id) => `<@${id}>`)];
-  const embed = itemEmbed(draft.item, COLORS.prompt)
+  const embed = itemEmbed(draft.item, COLORS.prompt, { image: false })
     .setDescription(
-      `<@${draft.authorId}> hat ein Item gepostet${draft.sourceUrl ? ` ([zum Post](${draft.sourceUrl}))` : ''}.\n` +
-        '**Wer darf rollen?** Wähle Spieler oder Rollen aus der Liste oder schreib sie mit `@Name` / `@Rolle` hier in den Kanal.',
+      '**Wer darf rollen?** Wähle Spieler oder Rollen aus der Liste oder schreib sie mit `@Name` / `@Rolle` hier in den Kanal.\n' +
+        `Danach postet der Bot das Item in <#${draft.lootChannelId}> und pingt die Spieler an.`,
     )
     .addFields({ name: 'Ausgewählt', value: fit(picked, ', ') });
 
@@ -56,8 +56,8 @@ export function promptView(draft) {
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`draft:start:${draft.id}`)
-          .setLabel('Thread erstellen')
-          .setEmoji('🧵')
+          .setLabel('Posten & Spieler pingen')
+          .setEmoji('📣')
           .setStyle(ButtonStyle.Success)
           .setDisabled(!picked.length),
         new ButtonBuilder().setCustomId(`draft:cancel:${draft.id}`).setLabel('Abbrechen').setStyle(ButtonStyle.Secondary),
@@ -89,7 +89,7 @@ export function panelView(session) {
       ),
     );
   }
-  rows.push(
+  if (session.rollingOpen) rows.push(
     new ActionRowBuilder().addComponents(
       new MentionableSelectMenuBuilder()
         .setCustomId(`panel:add:${session.id}`)
@@ -99,7 +99,7 @@ export function panelView(session) {
     ),
   );
   const decided = session.decided().slice(0, MAX_SELECT);
-  if (decided.length) {
+  if (decided.length && session.rollingOpen) {
     rows.push(
       new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
@@ -116,11 +116,16 @@ export function panelView(session) {
       ),
     );
   }
-  rows.push(
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`panel:close:${session.id}`).setLabel('Ohne Gewinner schließen').setStyle(ButtonStyle.Danger),
-    ),
+  const buttons = [];
+  if (session.rollingOpen) {
+    buttons.push(
+      new ButtonBuilder().setCustomId(`panel:lock:${session.id}`).setLabel('Rollen jetzt beenden').setEmoji('⏹️').setStyle(ButtonStyle.Primary),
+    );
+  }
+  buttons.push(
+    new ButtonBuilder().setCustomId(`panel:close:${session.id}`).setLabel('Ohne Gewinner schließen').setStyle(ButtonStyle.Danger),
   );
+  rows.push(new ActionRowBuilder().addComponents(buttons));
   return { content: '', embeds: [embed], components: rows };
 }
 
@@ -142,28 +147,38 @@ function rollLines(session) {
 }
 
 /**
- * Roll-Liste. Im Thread ohne Bild (der Item-Post steht direkt darüber),
- * im Leader-Panel mit Bild und Link zum Thread.
+ * Roll-Liste – im Thread und im Leader-Panel (dort mit Link zum Thread).
+ * Ohne Bild: Das Item steht jeweils direkt darüber.
  */
 export function lootEmbed(session, { panel = false } = {}) {
   const c = session.counts();
   const color = !session.closed ? COLORS.open : session.winnerId ? COLORS.won : COLORS.none;
   const lines = rollLines(session);
-  const head = panel ? `🧵 <#${session.threadId}> · von <@${session.ownerId}>\n\n` : '';
-  const embed = itemEmbed(session.item, color, { image: panel }).setDescription(
-    head + (lines.length ? fit(lines, '\n', 3900) : '*Noch keine Würfe.*'),
+  const deadline = session.endsAt ? `<t:${Math.floor(session.endsAt / 1000)}:R>` : null;
+  const status = session.closed
+    ? ''
+    : session.rollsLocked
+      ? '⏹️ **Rollen beendet** – der Leader wählt jetzt den Gewinner.\n\n'
+      : deadline
+        ? `⏰ Rollzeit endet ${deadline}\n\n`
+        : '';
+  const head = (panel ? `🧵 <#${session.threadId}> · von <@${session.ownerId}>\n` : '') + status;
+  const embed = itemEmbed(session.item, color, { image: false }).setDescription(
+    (head + (lines.length ? fit(lines, '\n', 3800) : '*Noch keine Würfe.*')).trim(),
   );
 
   const passed = session.withStatus(Status.PASSED).map((id) => `<@${id}>`);
   const pending = session.withStatus(Status.PENDING).map((id) => `<@${id}>`);
   if (passed.length) embed.addFields({ name: `🚫 Gepasst (${passed.length})`, value: fit(passed, ' ') });
-  if (pending.length && !session.closed) embed.addFields({ name: `⏳ Offen (${pending.length})`, value: fit(pending, ' ') });
+  if (pending.length && session.rollingOpen) embed.addFields({ name: `⏳ Offen (${pending.length})`, value: fit(pending, ' ') });
 
   if (session.winnerId) {
     embed.addFields({ name: 'Gewinner', value: `🏆 <@${session.winnerId}>` });
     embed.setFooter({ text: 'Verlosung abgeschlossen' });
   } else if (session.closed) {
     embed.setFooter({ text: 'Ohne Gewinner geschlossen' });
+  } else if (session.rollsLocked) {
+    embed.setFooter({ text: `${c.rolled} Würfe · ${c.passed} gepasst${c.pending ? ` · ${c.pending} nicht entschieden` : ''}` });
   } else if (panel) {
     embed.setFooter({ text: `${c.total - c.pending}/${c.total} entschieden` });
   } else {
@@ -176,7 +191,7 @@ export function lootEmbed(session, { panel = false } = {}) {
 
 /** Spieler-Bedienung im Thread: nur Würfeln und Passen. */
 export function lootComponents(session) {
-  if (session.closed) return [];
+  if (!session.rollingOpen) return [];
   return [
     new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
@@ -188,6 +203,18 @@ export function lootComponents(session) {
       new ButtonBuilder().setCustomId(`loot:pass:${session.id}`).setLabel('Passen').setEmoji('🚫').setStyle(ButtonStyle.Secondary),
     ),
   ];
+}
+
+/** Text der Item-Nachricht im Loot-Kanal (das Bild hängt als Datei daran). */
+export function starterContent(session) {
+  const { item } = session;
+  const link = item.url ? ` · [Questlog](<${item.url}>)` : '';
+  let status;
+  if (session.winnerId) status = `🏆 Vergeben an <@${session.winnerId}>`;
+  else if (session.closed) status = '✖️ Ohne Gewinner geschlossen';
+  else if (session.rollsLocked) status = '⏹️ Rollen beendet – der Leader wählt den Gewinner';
+  else status = `🎲 Rollen im Thread bis <t:${Math.floor(session.endsAt / 1000)}:f>`;
+  return `## 💰 ${item.name}${link}\n${status}`;
 }
 
 export function lootPayload(session) {

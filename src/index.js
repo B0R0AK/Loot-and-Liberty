@@ -15,38 +15,40 @@ const list = (v) =>
     .map((s) => s.trim())
     .filter(Boolean);
 
-const lootChannelIds = list(process.env.LOOT_CHANNEL_IDS);
-if (!lootChannelIds.length) {
-  console.error('LOOT_CHANNEL_IDS fehlt – in welchem Kanal soll der Bot Loot erkennen?');
-  process.exit(1);
-}
-
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers, // Mitglieder einer Rolle auflösen
-    GatewayIntentBits.GuildMessages, // Posts im Loot- und Leader-Kanal sehen
+    GatewayIntentBits.GuildMessages, // Posts im Leader-Kanal sehen
     GatewayIntentBits.MessageContent, // Screenshots, Links und @Erwähnungen lesen
   ],
   partials: [Partials.Channel],
 });
 
-const store = new SessionStore(process.env.DATA_FILE || 'data/sessions.json').load();
+// Kanäle können per /einrichten gesetzt werden; die .env-Werte gelten als Vorgabe.
+const store = new SessionStore(process.env.DATA_FILE || 'data/sessions.json', {
+  defaults: {
+    leaderChannelId: process.env.LOOT_LEADER_CHANNEL_ID?.trim() || null,
+    lootChannelId: process.env.LOOT_CHANNEL_ID?.trim() || null,
+  },
+}).load();
+
 const bot = createLootBot({
   client,
   store,
-  lootChannelIds,
-  leaderChannelId: process.env.LOOT_LEADER_CHANNEL_ID?.trim() || null,
-  leaderRoleIds: list(process.env.LOOT_LEADER_ROLE_IDS),
-  managerIds: list(process.env.LOOT_MANAGER_IDS),
+  botAdminIds: list(process.env.BOT_ADMIN_IDS),
+  rollHours: Number(process.env.LOOT_ROLL_HOURS) || 24,
 });
 
 client.once(Events.ClientReady, async (c) => {
-  console.log(`Eingeloggt als ${c.user.tag} · Loot-Kanäle: ${lootChannelIds.join(', ')} · ${store.sessions.size} offene Verlosung(en)`);
+  console.log(`Eingeloggt als ${c.user.tag} · ${store.sessions.size} offene Verlosung(en)`);
+  bot.restoreTimers();
+  for (const guild of c.guilds.cache.values()) await bot.registerCommands(guild);
   if (c.user.username !== BOT_NAME) {
     await c.user.setUsername(BOT_NAME).catch((err) => console.warn(`Name nicht geändert: ${err.message}`));
   }
 });
+client.on(Events.GuildCreate, (guild) => bot.registerCommands(guild));
 client.on(Events.MessageCreate, bot.onMessage);
 client.on(Events.InteractionCreate, bot.onInteraction);
 

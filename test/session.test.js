@@ -90,3 +90,26 @@ test('Spieler nachträglich hinzufügen', () => {
   assert.deepEqual(s.addParticipants(['f']), []);
   assert.equal(s.reset('a').reason, 'closed');
 });
+
+test('Rollzeit beenden: keine Würfe mehr, Gewinner wählbar', () => {
+  const s = make();
+  s.roll('a', 'bis', () => 60);
+  assert.equal(s.rollingOpen, true);
+  assert.equal(s.lockRolls(), true);
+  assert.equal(s.lockRolls(), false);
+  assert.equal(s.rollingOpen, false);
+  assert.equal(s.roll('b', 'bis').reason, 'locked');
+  assert.equal(s.pass('b').reason, 'locked');
+  assert.equal(s.reset('a').reason, 'locked');
+  assert.deepEqual(s.addParticipants(['z']), []);
+  assert.equal(s.chooseWinner('a').ok, true);
+});
+
+test('Rollzeit wird gespeichert', () => {
+  const s = make();
+  s.endsAt = 123;
+  s.lockRolls();
+  const copy = LootSession.fromJSON(JSON.parse(JSON.stringify(s)));
+  assert.equal(copy.endsAt, 123);
+  assert.equal(copy.rollsLocked, true);
+});
