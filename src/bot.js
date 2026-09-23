@@ -330,22 +330,41 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     return next;
   }
 
+  /**
+   * Item-Nachricht im Loot-Kanal: Solange gerollt wird, groß mit Bild und Status.
+   * Danach schrumpft sie auf eine kleine Karte (Vorschaubild + Ergebnis). Das Bild wird
+   * dafür neu angehängt und das große entfernt; der Thread bleibt an der Nachricht hängen.
+   */
+  async function editStarter(session) {
+    const ch = await channel(session.channelId);
+    if (session.rollingOpen) {
+      return ch.messages.edit(session.starterMessageId, { content: starterContent(session), allowedMentions: { parse: [] } });
+    }
+    const msg = await ch.messages.fetch(session.starterMessageId);
+    const att = msg.attachments.find((a) => a.contentType?.startsWith('image/'));
+    const file = att ? { attachment: att.url, name: att.name || 'item.png' } : null;
+    const compact = (withImage) => ({
+      content: '',
+      embeds: [summaryEmbed(session, withImage ? file.name : null, { forLootChannel: true })],
+      allowedMentions: { parse: [] },
+      ...(withImage ? { files: [file], attachments: [] } : {}),
+    });
+    try {
+      await msg.edit(compact(Boolean(file)));
+    } catch (err) {
+      // Bild konnte nicht neu angehängt werden → Karte ohne Vorschaubild, großes Bild bleibt.
+      console.warn('Item-Nachricht verkleinern: Bild nicht übernommen –', err.message);
+      await msg.edit(compact(false));
+    }
+  }
+
   /** Roll-Liste im Thread, Leader-Panel und (bei Statuswechsel) die Item-Nachricht neu zeichnen. */
   function render(session, { starter = false } = {}) {
     const jobs = [
       queueEdit(`thread:${session.id}`, async () => (await channel(session.threadId)).messages.edit(session.messageId, lootPayload(session))),
       queueEdit(`panel:${session.id}`, async () => (await channel(session.panelChannelId)).messages.edit(session.panelMessageId, panelView(session))),
     ];
-    if (starter) {
-      jobs.push(
-        queueEdit(`starter:${session.id}`, async () =>
-          (await channel(session.channelId)).messages.edit(session.starterMessageId, {
-            content: starterContent(session),
-            allowedMentions: { parse: [] },
-          }),
-        ),
-      );
-    }
+    if (starter) jobs.push(queueEdit(`starter:${session.id}`, () => editStarter(session)));
     return Promise.all(jobs);
   }
 

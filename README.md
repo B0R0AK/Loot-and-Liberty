@@ -25,6 +25,7 @@ Es gibt zwei Kanäle:
    Die Liste steht im Thread und im Leader-Panel.
 6. **Ende der Rollzeit:** nach 24 Stunden oder früher per **⏹️ Rollen jetzt beenden**.
    Der Bot **sperrt und archiviert den Thread**, damit die Kanalliste aufgeräumt bleibt, und pingt die Verwalter im Leader-Kanal an.
+   Die Item-Nachricht im Loot-Kanal **schrumpft auf eine kleine Karte** mit Vorschaubild. Nach der Vergabe steht dort der Gewinner.
    Für die Gewinner-Nachricht öffnet er den Thread kurz und schließt ihn danach wieder.
 7. **Leader-Panel** im Leader-Kanal, nur für die Verwalter dieser Verlosung:
    - 👑 **Gewinner auswählen**: Der Bot verkündet ihn im Thread und vermerkt ihn an der Item-Nachricht.
