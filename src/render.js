@@ -151,7 +151,7 @@ export function panelView(session) {
           .addOptions(
             decided.map((d) => ({
               label: session.nameOf(d.userId).slice(0, 100),
-              description: d.status === Status.ROLLED ? `${d.roll} · ${purposeById(d.purpose).label}` : 'gepasst',
+              description: d.status === Status.ROLLED ? `${d.roll} · ${purposeById(d.purpose).label}` : d.roll === null ? 'gepasst' : `gepasst (hatte ${d.roll})`,
               emoji: d.status === Status.ROLLED ? '🎲' : '🚫',
               value: d.userId,
             })),
@@ -230,7 +230,11 @@ export function lootEmbed(session, { panel = false } = {}) {
   const body = lines.length ? fit(lines, '\n', 3600) : '*Noch keine Würfe – wähle unten, wofür du rollst.*';
   const embed = itemEmbed(session.item, color, { image: false }).setDescription(`${head.join('\n')}\n\n${body}`);
 
-  const passed = session.withStatus(Status.PASSED).map((id) => `<@${id}>`);
+  // Wer nach dem Würfeln gepasst hat, behält seinen (verworfenen) Wurf durchgestrichen.
+  const passed = session.withStatus(Status.PASSED).map((id) => {
+    const roll = session.participants.get(id).roll;
+    return roll === null ? `<@${id}>` : `<@${id}> ~~${roll}~~`;
+  });
   const pending = session.withStatus(Status.PENDING).map((id) => `<@${id}>`);
   if (passed.length) embed.addFields({ name: `🚫 Gepasst · ${passed.length}`, value: fit(passed, ' '), inline: true });
   if (pending.length && session.rollingOpen) embed.addFields({ name: `⏳ Noch offen · ${pending.length}`, value: fit(pending, ' '), inline: true });
@@ -292,7 +296,7 @@ export const HELP_TEXT = [
   '1. Leader posten einen Screenshot oder Questlog-Link im **Leader-Kanal**.',
   '2. Im Fenster darunter wählen sie, **wer rollen darf**, **wer verwaltet** und die **Rollzeit**.',
   '3. Der Bot postet das Item im **Loot-Kanal** mit Thread und pingt die Spieler an.',
-  '4. Spieler wählen im Thread, wofür sie würfeln (⭐ BiS · 💧 Watermark · 📜 Lithografie · 💰 Verkauf · ✨ Potential), oder passen.',
+  '4. Spieler wählen im Thread, wofür sie würfeln (⭐ BiS · 💧 Watermark · 📜 Lithografie · 💰 Verkauf · ✨ Potential), oder passen – auch noch nach dem Würfeln. Neu würfeln geht nur, wenn der Leader sie zurücksetzt.',
   '5. Die Verwalter wählen im **Leader-Panel** den Gewinner. Dort können sie auch Spieler hinzufügen, Entscheidungen zurücksetzen und die Rollzeit ändern.',
   '',
   '**Befehle**',

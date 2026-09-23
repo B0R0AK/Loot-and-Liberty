@@ -326,8 +326,8 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     if (res.reason !== 'already') return REASON_TEXT[res.reason] ?? 'Das geht gerade nicht.';
     const p = res.participant;
     return p.status === 'rolled'
-      ? `Du hast bereits gewürfelt: **${p.roll}** (${purposeById(p.purpose)?.label}).`
-      : 'Du hast bereits gepasst.';
+      ? `Du hast bereits gewürfelt: **${p.roll}** (${purposeById(p.purpose)?.label}). Du kannst noch passen.`
+      : 'Du hast bereits gepasst. Neu würfeln geht nur, wenn der Leader dich zurücksetzt.';
   }
 
   // ---------- 4. Spieler: Würfeln und Passen (Thread) ----------
@@ -355,7 +355,13 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     if (action === 'pass') {
       const res = session.pass(interaction.user.id);
       if (!res.ok) return interaction.reply(ephemeral(failText(res)));
-      await interaction.reply(ephemeral('🚫 Du hast gepasst.'));
+      await interaction.reply(
+        ephemeral(
+          res.droppedRoll !== null
+            ? `🚫 Du hast gepasst – dein Wurf **${res.droppedRoll}** zählt nicht mehr. Neu würfeln geht nur, wenn der Leader dich zurücksetzt.`
+            : '🚫 Du hast gepasst. Neu würfeln geht nur, wenn der Leader dich zurücksetzt.',
+        ),
+      );
       return afterDecision(session);
     }
   }

@@ -112,11 +112,19 @@ export class LootSession {
     return { ok: true, value: res.participant.roll };
   }
 
+  /**
+   * Passen – auch nachdem man schon gewürfelt hat (der Wurf zählt dann nicht mehr).
+   * Wieder würfeln geht danach erst, wenn der Leader die Entscheidung zurücksetzt.
+   */
   pass(userId) {
-    const res = this.#decide(userId);
-    if (!res.ok) return res;
-    Object.assign(res.participant, { status: Status.PASSED, at: Date.now() });
-    return { ok: true };
+    if (this.closed) return { ok: false, reason: 'closed' };
+    if (this.rollsLocked) return { ok: false, reason: 'locked' };
+    const p = this.participants.get(userId);
+    if (!p) return { ok: false, reason: 'not-eligible' };
+    if (p.status === Status.PASSED) return { ok: false, reason: 'already', participant: p };
+    const droppedRoll = p.status === Status.ROLLED ? p.roll : null;
+    Object.assign(p, { status: Status.PASSED, at: Date.now() });
+    return { ok: true, droppedRoll };
   }
 
   /** Leader setzt eine Entscheidung zurück – der Spieler kann neu wählen. */

@@ -18,7 +18,6 @@ test('nur berechtigte Spieler dürfen würfeln, jeder nur einmal', () => {
   assert.equal(s.roll('a', 'nope').reason, 'bad-purpose');
   assert.equal(s.roll('a', 'bis', () => 42).value, 42);
   assert.equal(s.roll('a', 'sell', () => 99).reason, 'already');
-  assert.equal(s.pass('a').reason, 'already');
   assert.deepEqual({ ...s.participants.get('a'), at: 0 }, { status: Status.ROLLED, roll: 42, purpose: 'bis', at: 0 });
 });
 
@@ -144,4 +143,21 @@ test('Rollzeit ändern nur, solange gerollt werden kann', () => {
   s.lockRolls();
   assert.equal(s.setDeadline(9000), false);
   assert.equal(s.endsAt, 5000);
+});
+
+test('Nach dem Würfeln passen: Wurf zählt nicht mehr, erneut würfeln erst nach Zurücksetzen', () => {
+  const s = make();
+  s.roll('a', 'bis', () => 80);
+  s.roll('b', 'bis', () => 20);
+  assert.deepEqual(s.pass('a'), { ok: true, droppedRoll: 80 });
+  assert.equal(s.participants.get('a').status, Status.PASSED);
+  assert.deepEqual(s.rolls().map((r) => r.userId), ['b']);
+  assert.equal(s.chooseWinner('a').reason, 'not-rolled');
+  assert.equal(s.pass('a').reason, 'already');
+  assert.equal(s.roll('a', 'bis', () => 99).reason, 'already');
+  assert.equal(s.reset('a').ok, true);
+  assert.equal(s.roll('a', 'sell', () => 55).value, 55);
+  assert.deepEqual(s.pass('c'), { ok: true, droppedRoll: null });
+  s.lockRolls();
+  assert.equal(s.pass('b').reason, 'locked');
 });
