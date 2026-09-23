@@ -29,3 +29,20 @@ test('Leader und Kanäle werden gespeichert, .env-Werte sind Fallback', () => {
   assert.deepEqual(loaded.guild('g').leaders.users, []);
   clearTimeout(loaded.timer);
 });
+
+test('Rollzeit pro Server und offene Verlosungen', () => {
+  const store = new SessionStore(null, { defaults: { rollHours: 12 } });
+  assert.equal(store.guild('g').rollHours, 12);
+  store.updateGuild('g', (cfg) => (cfg.rollHours = 48));
+  assert.equal(store.guild('g').rollHours, 48);
+  assert.equal(new SessionStore(null).guild('x').rollHours, 24);
+
+  const mk = (id, guildId, createdAt) => new LootSession({ id, guildId, createdAt, ownerId: 'o', item: { name: id }, eligibleIds: ['a'] });
+  const a = mk('a', 'g', 2);
+  const b = mk('b', 'g', 1);
+  const c = mk('c', 'other', 0);
+  const d = mk('d', 'g', 3);
+  d.close('no-winner');
+  for (const s of [a, b, c, d]) store.set(s);
+  assert.deepEqual(store.openSessions('g').map((s) => s.id), ['b', 'a']);
+});

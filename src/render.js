@@ -19,6 +19,15 @@ export function progressBar(done, total, width = 10) {
 }
 
 const ts = (ms, style) => `<t:${Math.floor(ms / 1000)}:${style}>`;
+
+/** Auswahl für die Rollzeit (Stunden). */
+export const ROLL_HOUR_CHOICES = [1, 2, 4, 6, 12, 24, 48, 72];
+export const hoursLabel = (h) => (h === 1 ? '1 Stunde' : `${h} Stunden`);
+
+function hourOptions(selected) {
+  const hours = [...new Set([...ROLL_HOUR_CHOICES, selected])].filter(Boolean).sort((a, b) => a - b);
+  return hours.map((h) => ({ label: hoursLabel(h), value: String(h), emoji: '⏰', default: h === selected }));
+}
 const FIELD_LIMIT = 1024;
 
 /** Liste von Zeilen/Erwähnungen so kürzen, dass sie in ein Feld passt. */
@@ -59,7 +68,8 @@ export function promptView(draft) {
     )
     .addFields(
       { name: `🎲 Darf rollen${picked.length ? ` (${picked.length})` : ''}`, value: picked.length ? fit(picked, ' ') : '*noch niemand*' },
-      { name: '👑 Verwaltet von', value: fit(managerMentions(draft.authorId, draft.managers), ' ') },
+      { name: '👑 Verwaltet von', value: fit(managerMentions(draft.authorId, draft.managers), ' '), inline: true },
+      { name: '⏰ Rollzeit', value: hoursLabel(draft.rollHours), inline: true },
     );
 
   return {
@@ -79,6 +89,12 @@ export function promptView(draft) {
           .setPlaceholder('👑 Wer verwaltet? Leader oder Leader-Rollen (optional) …')
           .setMinValues(0)
           .setMaxValues(MAX_SELECT),
+      ),
+      new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`draft:hours:${draft.id}`)
+          .setPlaceholder('⏰ Rollzeit …')
+          .addOptions(hourOptions(draft.rollHours)),
       ),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -135,11 +151,21 @@ export function panelView(session) {
           .addOptions(
             decided.map((d) => ({
               label: session.nameOf(d.userId).slice(0, 100),
-              description: d.status === Status.ROLLED ? `${d.roll} · ${purposeById(d.purpose).label}` : 'gepasst',
+              description: d.status === Status.ROLLED ? `${d.roll} · ${purposeById(d.purpose).label}` : d.roll === null ? 'gepasst' : `gepasst (hatte ${d.roll})`,
               emoji: d.status === Status.ROLLED ? '🎲' : '🚫',
               value: d.userId,
             })),
           ),
+      ),
+    );
+  }
+  if (session.rollingOpen) {
+    rows.push(
+      new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`panel:time:${session.id}`)
+          .setPlaceholder('⏰ Rollzeit ändern …')
+          .addOptions(ROLL_HOUR_CHOICES.map((h) => ({ label: `Endet in ${hoursLabel(h)}`, description: 'ab jetzt gerechnet', value: String(h), emoji: '⏰' }))),
       ),
     );
   }
@@ -204,7 +230,11 @@ export function lootEmbed(session, { panel = false } = {}) {
   const body = lines.length ? fit(lines, '\n', 3600) : '*Noch keine Würfe – wähle unten, wofür du rollst.*';
   const embed = itemEmbed(session.item, color, { image: false }).setDescription(`${head.join('\n')}\n\n${body}`);
 
-  const passed = session.withStatus(Status.PASSED).map((id) => `<@${id}>`);
+  // Wer nach dem Würfeln gepasst hat, behält seinen (verworfenen) Wurf durchgestrichen.
+  const passed = session.withStatus(Status.PASSED).map((id) => {
+    const roll = session.participants.get(id).roll;
+    return roll === null ? `<@${id}>` : `<@${id}> ~~${roll}~~`;
+  });
   const pending = session.withStatus(Status.PENDING).map((id) => `<@${id}>`);
   if (passed.length) embed.addFields({ name: `🚫 Gepasst · ${passed.length}`, value: fit(passed, ' '), inline: true });
   if (pending.length && session.rollingOpen) embed.addFields({ name: `⏳ Noch offen · ${pending.length}`, value: fit(pending, ' '), inline: true });
@@ -251,6 +281,31 @@ export function starterContent(session) {
   else status = `🎲 **Verlosung läuft** · endet ${ts(session.endsAt, 'f')} (${ts(session.endsAt, 'R')})`;
   return `## ${ITEM_ICON} ${item.name}\n${status}\n-# 👥 ${c.total} Spieler${link} · Würfeln & Passen im Thread ↓`;
 }
+
+/** Eine Zeile für /loot offen. */
+export function openSessionLine(session) {
+  const c = session.counts();
+  const state = session.rollsLocked ? '⏹️ Gewinner offen' : `⏰ endet ${ts(session.endsAt, 'R')}`;
+  const panel = `https://discord.com/channels/${session.guildId}/${session.panelChannelId}/${session.panelMessageId}`;
+  return `${ITEM_ICON} **${session.item.name}** · ${state} · 🎲 ${c.total - c.pending}/${c.total} · <#${session.threadId}> · [Panel](${panel})`;
+}
+
+export const HELP_TEXT = [
+  '## 🎁 Loot and Liberty',
+  '**So läuft eine Verlosung**',
+  '1. Leader posten einen Screenshot oder Questlog-Link im **Leader-Kanal**.',
+  '2. Im Fenster darunter wählen sie, **wer rollen darf**, **wer verwaltet** und die **Rollzeit**.',
+  '3. Der Bot postet das Item im **Loot-Kanal** mit Thread und pingt die Spieler an.',
+  '4. Spieler wählen im Thread, wofür sie würfeln (⭐ BiS · 💧 Watermark · 📜 Lithografie · 💰 Verkauf · ✨ Potential), oder passen – auch noch nach dem Würfeln. Neu würfeln geht nur, wenn der Leader sie zurücksetzt.',
+  '5. Die Verwalter wählen im **Leader-Panel** den Gewinner. Dort können sie auch Spieler hinzufügen, Entscheidungen zurücksetzen und die Rollzeit ändern.',
+  '',
+  '**Befehle**',
+  '`/loot offen` – laufende Verlosungen (Leader)',
+  '`/leader liste` – alle Loot-Leader',
+  '`/leader hinzufügen` · `/leader entfernen` – Leader festlegen (Bot-Admins)',
+  '`/einrichten` – Kanäle und Standard-Rollzeit (Bot-Admins)',
+  '`/hilfe` – diese Übersicht',
+].join('\n');
 
 export function lootPayload(session) {
   return { embeds: [lootEmbed(session)], components: lootComponents(session) };

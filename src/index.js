@@ -30,6 +30,7 @@ const store = new SessionStore(process.env.DATA_FILE || 'data/sessions.json', {
   defaults: {
     leaderChannelId: process.env.LOOT_LEADER_CHANNEL_ID?.trim() || null,
     lootChannelId: process.env.LOOT_CHANNEL_ID?.trim() || null,
+    rollHours: Number(process.env.LOOT_ROLL_HOURS) || 24,
   },
 }).load();
 
@@ -37,7 +38,6 @@ const bot = createLootBot({
   client,
   store,
   botAdminIds: list(process.env.BOT_ADMIN_IDS),
-  rollHours: Number(process.env.LOOT_ROLL_HOURS) || 24,
 });
 
 client.once(Events.ClientReady, async (c) => {
