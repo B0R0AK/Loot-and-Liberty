@@ -1,308 +1,309 @@
-import {
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  EmbedBuilder,
-  MentionableSelectMenuBuilder,
-  MessageFlags,
-  PermissionFlagsBits,
-} from 'discord.js';
-import { fetchLinkPreview, parseItemInput } from './item.js';
-import { messagePayload, mentionContent } from './render.js';
-import { LootSession } from './session.js';
+import { ChannelType, MessageFlags, PermissionFlagsBits } from 'discord.js';
+import { detectItem, fetchLinkPreview } from './item.js';
+import { lootPayload, pingChunks, promptDoneView, promptView } from './render.js';
+import { LootSession, purposeById } from './session.js';
 
-const DRAFT_TTL_MS = 15 * 60_000;
-const KEEP_CLOSED_MS = 60 * 60_000;
-const MAX_SELECT = 25;
+const DRAFT_TTL_MS = 30 * 60_000;
 
-export function createLootBot({ leaderRoleIds = [], defaultMinutes = 10 } = {}) {
-  /** Entwürfe aus /loot, bis der Leader Teilnehmer gewählt und gepostet hat. */
+export function createLootBot({ client, store, lootChannelIds = [], leaderRoleIds = [] }) {
+  /** Gepostete Items, für die noch ausgewählt wird, wer rollen darf. Key = ID der Item-Nachricht. */
   const drafts = new Map();
-  /** Laufende (und kürzlich beendete) Verlosungen. */
-  const sessions = new Map();
+  /** Serialisierte Edits pro Verlosung, damit immer der neueste Stand zuletzt ankommt. */
+  const renderChains = new Map();
 
-  function isLeader(interaction) {
-    if (leaderRoleIds.length) {
-      const roles = interaction.member?.roles;
-      const ids = Array.isArray(roles) ? roles : [...(roles?.cache?.keys() ?? [])];
-      if (ids.some((id) => leaderRoleIds.includes(id))) return true;
-    }
-    if (interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) return true;
-    return !leaderRoleIds.length && Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages));
+  const ephemeral = (content) => ({ content, flags: MessageFlags.Ephemeral });
+
+  function isLootChannel(channel) {
+    return channel?.type === ChannelType.GuildText && lootChannelIds.includes(channel.id);
   }
 
-  const ephemeral = (content, extra = {}) => ({ content, flags: MessageFlags.Ephemeral, ...extra });
+  /** Darf dieses Mitglied Loot posten? Ohne konfigurierte Rollen: jeder im Loot-Kanal. */
+  function mayPostLoot(member) {
+    if (!leaderRoleIds.length) return true;
+    if (member?.permissions?.has(PermissionFlagsBits.Administrator)) return true;
+    return leaderRoleIds.some((id) => member?.roles?.cache?.has(id));
+  }
 
-  // ---------- Setup: /loot ----------
+  /** Ersteller der Verlosung oder Moderator (Nachrichten verwalten). */
+  function mayManage(interaction, ownerId) {
+    return interaction.user.id === ownerId || Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages));
+  }
 
-  function setupView(draft) {
-    const { users, roles } = draft.selection;
-    const picked = [...roles.map((id) => `<@&${id}>`), ...users.map((id) => `<@${id}>`)];
-    const embed = new EmbedBuilder()
-      .setTitle(`💰 ${draft.item.name}`)
-      .setColor(0x5865f2)
-      .setDescription(
-        picked.length
-          ? `**Berechtigt:** ${picked.join(', ')}`
-          : 'Wähle unten Spieler und/oder Rollen aus, die auf das Item würfeln dürfen.',
-      )
-      .addFields({ name: 'Dauer', value: `${draft.minutes} Min.`, inline: true });
-    if (draft.item.url) embed.setURL(draft.item.url);
-    if (draft.item.image) embed.setImage(draft.item.image);
-
+  function mentionsOf(message) {
     return {
-      embeds: [embed],
-      components: [
-        new ActionRowBuilder().addComponents(
-          new MentionableSelectMenuBuilder()
-            .setCustomId(`setup:select:${draft.id}`)
-            .setPlaceholder('Spieler oder Rollen auswählen …')
-            .setMinValues(1)
-            .setMaxValues(MAX_SELECT),
-        ),
-        new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`setup:post:${draft.id}`)
-            .setLabel('Posten')
-            .setEmoji('📣')
-            .setStyle(ButtonStyle.Success)
-            .setDisabled(!picked.length),
-          new ButtonBuilder().setCustomId(`setup:cancel:${draft.id}`).setLabel('Abbrechen').setStyle(ButtonStyle.Secondary),
-        ),
-      ],
+      users: [...message.mentions.parsedUsers.values()].filter((u) => !u.bot).map((u) => u.id),
+      roles: [...message.mentions.roles.keys()],
     };
   }
 
-  async function handleLootCommand(interaction) {
-    if (!isLeader(interaction)) {
-      return interaction.reply(ephemeral('Nur Leader dürfen Loot verteilen.'));
-    }
-    const attachment = interaction.options.getAttachment('bild');
-    if (attachment && !attachment.contentType?.startsWith('image/')) {
-      return interaction.reply(ephemeral('Der Anhang muss ein Bild sein (Screenshot des Items).'));
-    }
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const union = (a, b) => [...new Set([...a, ...b])].slice(0, 100);
 
-    const parsed = parseItemInput(interaction.options.getString('item', true));
-    const preview = parsed.url ? await fetchLinkPreview(parsed.url) : {};
-    const item = {
-      name: (parsed.nameFromInput ? parsed.name : preview.title || parsed.name).slice(0, 200),
-      url: parsed.url,
-      image: attachment?.url ?? preview.image ?? null,
-    };
+  // ---------- 1. Item im Loot-Kanal erkennen ----------
+
+  async function onMessage(message) {
+    if (message.author.bot || !isLootChannel(message.channel)) return;
+
+    const item = detectItem({
+      content: message.content,
+      attachments: [...message.attachments.values()].map((a) => ({ url: a.url, contentType: a.contentType })),
+    });
+
+    if (!item) {
+      // Nachtrag: "@Name @Rolle" für ein gerade gepostetes Item desselben Users.
+      const draft = [...drafts.values()].reverse().find((d) => d.authorId === message.author.id && d.channelId === message.channelId);
+      const m = mentionsOf(message);
+      if (!draft || (!m.users.length && !m.roles.length)) return;
+      draft.selection = { users: union(draft.selection.users, m.users), roles: union(draft.selection.roles, m.roles) };
+      await updatePrompt(draft);
+      await message.react('✅').catch(() => {});
+      return;
+    }
+
+    if (!mayPostLoot(message.member)) {
+      const r = await message.reply('Nur Leader dürfen hier Loot posten.');
+      setTimeout(() => r.delete().catch(() => {}), 10_000);
+      return;
+    }
+
+    if (item.url && (!item.nameFromInput || !item.image)) {
+      const preview = await fetchLinkPreview(item.url);
+      if (!item.nameFromInput && preview.title) item.name = preview.title.slice(0, 90);
+      item.image ??= preview.image ?? null;
+    }
 
     const draft = {
-      id: interaction.id,
-      leaderId: interaction.user.id,
-      channelId: interaction.channelId,
+      id: message.id,
+      authorId: message.author.id,
+      channelId: message.channelId,
       item,
-      minutes: interaction.options.getInteger('dauer') ?? defaultMinutes,
-      selection: { users: [], roles: [] },
+      selection: mentionsOf(message),
+      prompt: null,
     };
     drafts.set(draft.id, draft);
-    setTimeout(() => drafts.delete(draft.id), DRAFT_TTL_MS).unref();
+    draft.prompt = await message.reply({ ...promptView(draft), allowedMentions: { users: [draft.authorId] } });
 
-    await interaction.editReply(setupView(draft));
+    setTimeout(async () => {
+      if (drafts.get(draft.id) !== draft) return;
+      drafts.delete(draft.id);
+      await draft.prompt.edit({ content: '⌛ Abgelaufen – poste das Item einfach neu.', embeds: [], components: [] }).catch(() => {});
+    }, DRAFT_TTL_MS).unref();
   }
 
-  function getDraft(interaction, id) {
+  function updatePrompt(draft) {
+    return draft.prompt.edit(promptView(draft)).catch((err) => console.error('Prompt-Update fehlgeschlagen:', err.message));
+  }
+
+  // ---------- 2. Auswahl, wer rollen darf ----------
+
+  async function getDraft(interaction, id) {
     const draft = drafts.get(id);
-    if (!draft || draft.leaderId !== interaction.user.id) return null;
+    if (!draft) {
+      await interaction.update({ content: '⌛ Abgelaufen – poste das Item einfach neu.', embeds: [], components: [] });
+      return null;
+    }
+    if (!mayManage(interaction, draft.authorId)) {
+      await interaction.reply(ephemeral(`Nur <@${draft.authorId}> kann das auswählen.`));
+      return null;
+    }
     return draft;
   }
 
-  async function handleSetupSelect(interaction, id) {
-    const draft = getDraft(interaction, id);
-    if (!draft) return interaction.update({ content: 'Dieser Entwurf ist abgelaufen. Starte neu mit `/loot`.', embeds: [], components: [] });
-    draft.selection = {
-      roles: [...interaction.roles.keys()],
-      users: [...interaction.users.keys()],
-    };
-    await interaction.update(setupView(draft));
-  }
-
   async function resolveEligible(guild, { users, roles }) {
-    const ids = new Set();
+    const members = new Map();
     if (roles.length) {
-      const members = await guild.members.fetch();
-      for (const m of members.values()) {
-        if (m.user.bot) continue;
-        if (roles.includes(guild.id) || roles.some((r) => m.roles.cache.has(r))) ids.add(m.id);
+      for (const m of (await guild.members.fetch()).values()) {
+        if (!m.user.bot && (roles.includes(guild.id) || roles.some((r) => m.roles.cache.has(r)))) members.set(m.id, m);
       }
     }
     if (users.length) {
-      const members = await guild.members.fetch({ user: users });
-      for (const m of members.values()) if (!m.user.bot) ids.add(m.id);
+      for (const m of (await guild.members.fetch({ user: users })).values()) if (!m.user.bot) members.set(m.id, m);
     }
-    return [...ids];
+    return members;
   }
 
-  async function handleSetupPost(interaction, id) {
-    const draft = getDraft(interaction, id);
-    if (!draft) return interaction.update({ content: 'Dieser Entwurf ist abgelaufen. Starte neu mit `/loot`.', embeds: [], components: [] });
-    await interaction.deferUpdate();
+  async function handleDraft(interaction, action, id) {
+    const draft = await getDraft(interaction, id);
+    if (!draft) return;
 
-    const eligible = await resolveEligible(interaction.guild, draft.selection);
-    if (!eligible.length) {
-      return interaction.editReply({ content: '⚠️ Die Auswahl enthält keine (menschlichen) Mitglieder.', ...setupView(draft) });
+    if (action === 'select') {
+      draft.selection = { roles: [...interaction.roles.keys()], users: [...interaction.users.keys()] };
+      return interaction.update(promptView(draft));
     }
-    drafts.delete(id);
 
-    const session = await startSession({
-      channel: interaction.channel ?? (await interaction.client.channels.fetch(draft.channelId)),
-      leaderId: draft.leaderId,
-      item: draft.item,
-      eligibleIds: eligible,
-      minutes: draft.minutes,
-      mentionRoleIds: draft.selection.roles,
-      mentionUserIds: draft.selection.users,
-    });
-    await interaction.editReply({
-      content: `✅ Verlosung gepostet: ${session.url} (${eligible.length} Teilnehmer)`,
-      embeds: [],
-      components: [],
-    });
+    if (action === 'cancel') {
+      drafts.delete(id);
+      await interaction.deferUpdate();
+      return interaction.message.delete().catch(() => {});
+    }
+
+    if (action === 'start') {
+      await interaction.deferUpdate();
+      const members = await resolveEligible(interaction.guild, draft.selection);
+      if (!members.size) return interaction.followUp(ephemeral('⚠️ In der Auswahl sind keine (menschlichen) Mitglieder.'));
+      drafts.delete(id);
+      await startLoot(interaction, draft, members);
+    }
   }
 
-  async function handleSetupCancel(interaction, id) {
-    drafts.delete(id);
-    await interaction.update({ content: 'Abgebrochen.', embeds: [], components: [] });
-  }
+  // ---------- 3. Thread erstellen und anpingen ----------
 
-  // ---------- Laufende Verlosung ----------
+  async function startLoot(interaction, draft, members) {
+    const source = await interaction.channel.messages.fetch(draft.id).catch(() => null);
+    if (!source) {
+      return interaction.editReply({ content: '⚠️ Die Item-Nachricht wurde gelöscht.', embeds: [], components: [] });
+    }
+    const thread = source.hasThread
+      ? source.thread
+      : await source.startThread({ name: `🎲 ${draft.item.name}`.slice(0, 100), autoArchiveDuration: 1440 });
 
-  async function startSession({ channel, leaderId, item, eligibleIds, minutes, mentionRoleIds, mentionUserIds, prefix = '' }) {
     const session = new LootSession({
-      id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
-      leaderId,
-      item,
-      eligibleIds,
-      endsAt: Date.now() + minutes * 60_000,
-      mentionRoleIds,
-      mentionUserIds,
+      id: draft.id,
+      ownerId: draft.authorId,
+      item: draft.item,
+      eligibleIds: [...members.keys()],
+      names: Object.fromEntries([...members.values()].map((m) => [m.id, m.displayName])),
+      guildId: interaction.guildId,
+      channelId: draft.channelId,
+      threadId: thread.id,
+      promptMessageId: draft.prompt?.id ?? interaction.message.id,
     });
-    session.minutes = minutes;
-    session.channel = channel;
-    session.renderChain = Promise.resolve();
 
-    const message = await channel.send({
-      content: mentionContent(session, prefix),
-      allowedMentions: { roles: mentionRoleIds.filter((r) => r !== channel.guild.id), users: mentionUserIds, parse: mentionRoleIds.includes(channel.guild.id) ? ['everyone'] : [] },
-      ...messagePayload(session),
-    });
-    session.messageId = message.id;
-    session.url = message.url;
-    sessions.set(session.id, session);
-    session.timer = setTimeout(() => finish(session, 'timeout').catch(console.error), minutes * 60_000);
-    return session;
-  }
+    const main = await thread.send(lootPayload(session));
+    session.messageId = main.id;
+    store.set(session);
 
-  /** Nachricht neu rendern – serialisiert, damit immer der neueste Stand zuletzt ankommt. */
-  function render(session) {
-    session.renderChain = session.renderChain
-      .then(() => session.channel.messages.edit(session.messageId, messagePayload(session)))
-      .catch((err) => console.error(`Konnte Verlosung ${session.id} nicht aktualisieren:`, err.message));
-    return session.renderChain;
-  }
-
-  async function finish(session, reason) {
-    if (!session.close(reason)) return;
-    clearTimeout(session.timer);
-    await render(session);
-
-    const { top, winners, tie } = session.result();
-    if (winners.length && !tie) {
-      await session.channel
-        .send({
-          content: `🏆 <@${winners[0]}> gewinnt **${session.item.name}** mit einer **${top}**!`,
-          reply: { messageReference: session.messageId, failIfNotExists: false },
-          allowedMentions: { users: [winners[0]] },
-        })
-        .catch((err) => console.error('Gewinner-Nachricht fehlgeschlagen:', err.message));
+    const ids = [...members.keys()];
+    for (const content of pingChunks(ids, `🎲 **${session.item.name}** – ihr dürft rollen! `)) {
+      await thread.send({ content, allowedMentions: { users: ids } });
     }
-    setTimeout(() => sessions.delete(session.id), tie ? KEEP_CLOSED_MS : 0).unref();
+    await interaction.editReply(promptDoneView(session));
+  }
+
+  // ---------- 4. Rollen, Passen, Gewinner ----------
+
+  function render(session) {
+    const prev = renderChains.get(session.id) ?? Promise.resolve();
+    const next = prev
+      .then(async () => {
+        const thread = await client.channels.fetch(session.threadId);
+        await thread.messages.edit(session.messageId, lootPayload(session));
+      })
+      .catch((err) => console.error(`Konnte Verlosung ${session.id} nicht aktualisieren:`, err.message));
+    renderChains.set(session.id, next);
+    return next;
+  }
+
+  async function updateChannelPrompt(session) {
+    try {
+      const channel = await client.channels.fetch(session.channelId);
+      await channel.messages.edit(session.promptMessageId, promptDoneView(session));
+    } catch (err) {
+      console.error('Kanal-Nachricht nicht aktualisiert:', err.message);
+    }
   }
 
   const REASON_TEXT = {
     closed: 'Diese Verlosung ist bereits beendet.',
     'not-eligible': 'Du bist für dieses Item nicht eingetragen.',
+    'bad-purpose': 'Unbekannte Auswahl.',
+    'not-rolled': 'Dieser Spieler hat nicht gewürfelt.',
   };
 
-  async function handleDecision(interaction, session, action) {
-    const res = action === 'roll' ? session.roll(interaction.user.id) : session.pass(interaction.user.id);
-    if (!res.ok) {
-      const text =
-        res.reason === 'already'
-          ? res.participant.status === 'rolled'
-            ? `Du hast bereits gewürfelt: **${res.participant.roll}**.`
-            : 'Du hast bereits gepasst.'
-          : REASON_TEXT[res.reason];
-      return interaction.reply(ephemeral(text));
-    }
-    await interaction.deferUpdate();
-    if (session.allDecided) await finish(session, 'complete');
-    else await render(session);
+  function failText(res) {
+    if (res.reason !== 'already') return REASON_TEXT[res.reason] ?? 'Das geht gerade nicht.';
+    const p = res.participant;
+    return p.status === 'rolled'
+      ? `Du hast bereits gewürfelt: **${p.roll}** (${purposeById(p.purpose)?.label}).`
+      : 'Du hast bereits gepasst.';
   }
 
-  async function handleLootButton(interaction, action, id) {
-    const session = sessions.get(id);
-    if (!session) {
-      return interaction.reply(ephemeral('Diese Verlosung ist nicht mehr aktiv (beendet oder Bot wurde neu gestartet).'));
-    }
-
-    if (action === 'roll' || action === 'pass') return handleDecision(interaction, session, action);
-
-    if (interaction.user.id !== session.leaderId && !isLeader(interaction)) {
-      return interaction.reply(ephemeral('Nur der Leader kann das.'));
-    }
-
-    if (action === 'end') {
-      await interaction.deferUpdate();
-      return finish(session, 'ended');
-    }
-
-    if (action === 'tiebreak') {
-      const { winners, tie } = session.result();
-      if (!tie || session.tiebreakStarted) return interaction.reply(ephemeral('Hier gibt es kein offenes Stechen.'));
-      session.tiebreakStarted = true;
-      sessions.delete(session.id);
-      await interaction.deferUpdate();
-      await render(session);
-      await startSession({
-        channel: session.channel,
-        leaderId: session.leaderId,
-        item: session.item,
-        eligibleIds: winners,
-        minutes: session.minutes,
-        mentionRoleIds: [],
-        mentionUserIds: winners,
-        prefix: '⚖️ **Stechen!** ',
+  async function afterDecision(session) {
+    store.save();
+    await render(session);
+    if (session.allDecided) {
+      const thread = await client.channels.fetch(session.threadId);
+      await thread.send({
+        content: `✅ Alle haben entschieden. <@${session.ownerId}>, bitte wähle den Gewinner aus.`,
+        allowedMentions: { users: [session.ownerId] },
       });
+    }
+  }
+
+  async function finish(interaction, session) {
+    store.delete(session.id);
+    await interaction.deferUpdate();
+    await render(session);
+    const thread = await client.channels.fetch(session.threadId);
+    if (session.winnerId) {
+      const p = session.participants.get(session.winnerId);
+      await thread.send({
+        content: `🏆 <@${session.winnerId}> bekommt **${session.item.name}** (Roll **${p.roll}**, ${purposeById(p.purpose)?.label}).`,
+        allowedMentions: { users: [session.winnerId] },
+      });
+    } else {
+      await thread.send('Verlosung ohne Gewinner geschlossen.');
+    }
+    await updateChannelPrompt(session);
+  }
+
+  async function handleLoot(interaction, action, id) {
+    const session = store.get(id);
+    if (!session) return interaction.reply(ephemeral('Diese Verlosung ist nicht mehr aktiv.'));
+
+    if (action === 'roll') {
+      const purpose = interaction.values[0];
+      const res = session.roll(interaction.user.id, purpose);
+      if (!res.ok) return interaction.reply(ephemeral(failText(res)));
+      await interaction.reply(ephemeral(`🎲 Du hast **${res.value}** gewürfelt (${purposeById(purpose).label}).`));
+      return afterDecision(session);
+    }
+
+    if (action === 'pass') {
+      const res = session.pass(interaction.user.id);
+      if (!res.ok) return interaction.reply(ephemeral(failText(res)));
+      await interaction.reply(ephemeral('🚫 Du hast gepasst.'));
+      return afterDecision(session);
+    }
+
+    if (!mayManage(interaction, session.ownerId)) {
+      return interaction.reply(ephemeral(`Nur <@${session.ownerId}> kann das.`));
+    }
+
+    if (action === 'winner') {
+      const res = session.chooseWinner(interaction.values[0]);
+      if (!res.ok) return interaction.reply(ephemeral(failText(res)));
+      return finish(interaction, session);
+    }
+
+    if (action === 'close') {
+      session.close('no-winner');
+      return finish(interaction, session);
     }
   }
 
   // ---------- Routing ----------
 
   async function onInteraction(interaction) {
+    if (!interaction.isMessageComponent()) return;
     try {
-      if (interaction.isChatInputCommand() && interaction.commandName === 'loot') {
-        return await handleLootCommand(interaction);
-      }
-      if (!interaction.isMessageComponent()) return;
       const [scope, action, id] = interaction.customId.split(':');
-      if (scope === 'setup') {
-        if (action === 'select' && interaction.isMentionableSelectMenu()) return await handleSetupSelect(interaction, id);
-        if (action === 'post') return await handleSetupPost(interaction, id);
-        if (action === 'cancel') return await handleSetupCancel(interaction, id);
-      }
-      if (scope === 'loot') return await handleLootButton(interaction, action, id);
+      if (scope === 'draft') return await handleDraft(interaction, action, id);
+      if (scope === 'loot') return await handleLoot(interaction, action, id);
     } catch (err) {
       console.error('Fehler bei Interaction:', err);
-      const msg = ephemeral('❌ Da ist etwas schiefgelaufen. Prüfe, ob der Bot in diesem Kanal schreiben darf.');
+      const msg = ephemeral('❌ Da ist etwas schiefgelaufen. Hat der Bot die Rechte für Threads in diesem Kanal?');
       if (interaction.deferred || interaction.replied) await interaction.followUp(msg).catch(() => {});
       else await interaction.reply(msg).catch(() => {});
     }
   }
 
-  return { onInteraction, sessions, drafts };
+  async function safeOnMessage(message) {
+    try {
+      await onMessage(message);
+    } catch (err) {
+      console.error('Fehler bei Nachricht:', err);
+    }
+  }
+
+  return { onMessage: safeOnMessage, onInteraction, drafts };
 }

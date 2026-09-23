@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { LootSession, Status, rollDie } from '../src/session.js';
 
-const make = (ids = ['a', 'b', 'c']) => new LootSession({ id: 's1', leaderId: 'lead', item: { name: 'Schwert' }, eligibleIds: ids });
+const make = (ids = ['a', 'b', 'c']) =>
+  new LootSession({ id: 's1', ownerId: 'owner', item: { name: 'Schwert' }, eligibleIds: ids, names: { a: 'Anna' } });
 
 test('rollDie bleibt im Bereich 1-100', () => {
   for (let i = 0; i < 5000; i++) {
@@ -13,54 +14,49 @@ test('rollDie bleibt im Bereich 1-100', () => {
 
 test('nur berechtigte Spieler dürfen würfeln, jeder nur einmal', () => {
   const s = make();
-  assert.deepEqual(s.roll('x'), { ok: false, reason: 'not-eligible' });
-  assert.equal(s.roll('a', () => 42).value, 42);
-  assert.equal(s.roll('a', () => 99).reason, 'already');
+  assert.equal(s.roll('x', 'bis').reason, 'not-eligible');
+  assert.equal(s.roll('a', 'nope').reason, 'bad-purpose');
+  assert.equal(s.roll('a', 'bis', () => 42).value, 42);
+  assert.equal(s.roll('a', 'sell', () => 99).reason, 'already');
   assert.equal(s.pass('a').reason, 'already');
-  assert.equal(s.participants.get('a').roll, 42);
+  assert.deepEqual({ ...s.participants.get('a'), at: 0 }, { status: Status.ROLLED, roll: 42, purpose: 'bis', at: 0 });
 });
 
-test('passen und Abschluss, wenn alle entschieden haben', () => {
-  const s = make(['a', 'b']);
-  s.pass('a');
-  assert.equal(s.allDecided, false);
-  s.roll('b', () => 7);
+test('Würfe nach Grund gruppiert, dann nach Wurf sortiert', () => {
+  const s = make(['a', 'b', 'c', 'd', 'e']);
+  s.roll('a', 'sell', () => 99);
+  s.roll('b', 'bis', () => 10);
+  s.roll('c', 'bis', () => 70);
+  s.roll('d', 'potential', () => 50);
+  s.pass('e');
+  assert.deepEqual(s.rolls().map((r) => r.userId), ['c', 'b', 'a', 'd']);
+  assert.deepEqual(s.withStatus(Status.PASSED), ['e']);
   assert.equal(s.allDecided, true);
-  assert.deepEqual(s.counts(), { pending: 0, rolled: 1, passed: 1, total: 2 });
-  assert.deepEqual(s.result(), { top: 7, winners: ['b'], tie: false });
 });
 
-test('Gleichstand wird erkannt', () => {
+test('Gewinner wählen: nur wer gewürfelt hat', () => {
   const s = make();
-  s.roll('a', () => 80);
-  s.roll('b', () => 80);
-  s.roll('c', () => 12);
-  assert.deepEqual(s.result(), { top: 80, winners: ['a', 'b'], tie: true });
+  s.roll('a', 'bis', () => 5);
+  s.pass('b');
+  assert.equal(s.chooseWinner('b').reason, 'not-rolled');
+  assert.equal(s.chooseWinner('c').reason, 'not-rolled');
+  assert.equal(s.chooseWinner('a').ok, true);
+  assert.equal(s.winnerId, 'a');
+  assert.equal(s.closed, true);
+  assert.equal(s.roll('c', 'bis').reason, 'closed');
+  assert.equal(s.chooseWinner('a').reason, 'closed');
 });
 
-test('niemand würfelt -> kein Gewinner', () => {
-  const s = make(['a']);
-  s.pass('a');
-  assert.deepEqual(s.result(), { top: null, winners: [], tie: false });
-});
-
-test('nach dem Schließen keine Entscheidungen mehr', () => {
+test('Speichern und Laden', () => {
   const s = make();
-  assert.equal(s.close('ended'), true);
-  assert.equal(s.close('timeout'), false);
-  assert.equal(s.closeReason, 'ended');
-  assert.equal(s.roll('a').reason, 'closed');
-});
-
-test('Rangliste: Würfe absteigend, dann gepasst, dann offen', () => {
-  const s = make(['a', 'b', 'c', 'd']);
-  s.pass('a');
-  s.roll('b', () => 10);
-  s.roll('c', () => 90);
-  assert.deepEqual(
-    s.standings().map((p) => [p.userId, p.status]),
-    [['c', Status.ROLLED], ['b', Status.ROLLED], ['a', Status.PASSED], ['d', Status.PENDING]],
-  );
+  s.roll('a', 'litho', () => 33);
+  s.threadId = 't1';
+  const copy = LootSession.fromJSON(JSON.parse(JSON.stringify(s)));
+  assert.equal(copy.threadId, 't1');
+  assert.equal(copy.nameOf('a'), 'Anna');
+  assert.equal(copy.participants.get('a').roll, 33);
+  assert.equal(copy.participants.get('b').status, Status.PENDING);
+  assert.equal(copy.roll('b', 'bis', () => 1).ok, true);
 });
 
 test('doppelte Teilnehmer werden zusammengeführt', () => {
