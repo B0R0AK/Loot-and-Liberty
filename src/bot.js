@@ -1,7 +1,7 @@
 import { MessageFlags, PermissionFlagsBits } from 'discord.js';
 import { commands } from './commands.js';
 import { detectItem, fetchLinkPreview } from './item.js';
-import { HELP_TEXT, hoursLabel, lootPayload, openSessionLine, panelView, pingChunks, promptView, starterContent } from './render.js';
+import { HELP_TEXT, hoursLabel, lootPayload, openSessionLine, panelView, pingChunks, promptView, renameModal, starterContent } from './render.js';
 import { LootSession, purposeById } from './session.js';
 
 const DRAFT_TTL_MS = 30 * 60_000;
@@ -157,6 +157,10 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
         users: [...interaction.users.values()].filter((u) => !u.bot && u.id !== draft.authorId).map((u) => u.id),
       };
       return interaction.update(promptView(draft));
+    }
+
+    if (action === 'rename') {
+      return interaction.showModal(renameModal('draft', id, draft.item.name));
     }
 
     if (action === 'hours') {
@@ -409,6 +413,10 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       return lockRolls(session, 'leader');
     }
 
+    if (action === 'rename') {
+      return interaction.showModal(renameModal('panel', id, session.item.name));
+    }
+
     if (action === 'time') {
       const hours = Number(interaction.values[0]);
       if (!session.setDeadline(Date.now() + hours * HOUR)) return interaction.reply(ephemeral(REASON_TEXT.locked));
@@ -448,6 +456,35 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       await render(session);
       await pingPlayers(await channel(session.threadId), added, `➕ Nachträglich dabei bei **${session.item.name}**: `);
     }
+  }
+
+  // ---------- Item umbenennen (Eingabefenster) ----------
+
+  async function handleRename(interaction, scope, id) {
+    const name = interaction.fields.getTextInputValue('name').replace(/\s+/g, ' ').trim().slice(0, 90);
+    if (!name) return interaction.reply(ephemeral('Der Name darf nicht leer sein.'));
+
+    if (scope === 'draft') {
+      const draft = drafts.get(id);
+      if (!draft) return interaction.reply(ephemeral('⌛ Abgelaufen – poste das Item einfach neu.'));
+      if (interaction.user.id !== draft.authorId && !isBotAdmin(whoInteracts(interaction))) {
+        return interaction.reply(ephemeral(`Das kann nur <@${draft.authorId}> ändern.`));
+      }
+      draft.item.name = name;
+      return interaction.update(promptView(draft));
+    }
+
+    const session = store.get(id);
+    if (!session) return interaction.reply(ephemeral('Diese Verlosung ist nicht mehr aktiv.'));
+    if (!mayManage(interaction, session)) {
+      return interaction.reply(ephemeral('Diese Verlosung verwalten nur die dafür ausgewählten Leader.'));
+    }
+    session.item.name = name;
+    store.save();
+    await interaction.deferUpdate();
+    await render(session, { starter: true });
+    const thread = await channel(session.threadId);
+    if (!thread.archived) await thread.setName(`🎲 ${name}`.slice(0, 100)).catch((err) => console.error('Thread umbenennen fehlgeschlagen:', err.message));
   }
 
   // ---------- Slash-Commands: /leader, /einrichten ----------
@@ -533,6 +570,11 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
         if (interaction.commandName === 'einrichten') return await handleSetupCommand(interaction);
         if (interaction.commandName === 'loot') return await handleLootCommand(interaction);
         if (interaction.commandName === 'hilfe') return await interaction.reply(ephemeral(HELP_TEXT));
+        return;
+      }
+      if (interaction.isModalSubmit()) {
+        const [kind, scope, id] = interaction.customId.split(':');
+        if (kind === 'rename') return await handleRename(interaction, scope, id);
         return;
       }
       if (!interaction.isMessageComponent()) return;

@@ -4,7 +4,10 @@ import {
   ButtonStyle,
   EmbedBuilder,
   MentionableSelectMenuBuilder,
+  ModalBuilder,
   StringSelectMenuBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } from 'discord.js';
 import { PURPOSES, Status, purposeById } from './session.js';
 
@@ -103,6 +106,7 @@ export function promptView(draft) {
           .setEmoji('📣')
           .setStyle(ButtonStyle.Success)
           .setDisabled(!picked.length),
+        new ButtonBuilder().setCustomId(`draft:rename:${draft.id}`).setLabel('Namen ändern').setEmoji('✏️').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`draft:cancel:${draft.id}`).setLabel('Abbrechen').setStyle(ButtonStyle.Secondary),
       ),
     ],
@@ -176,6 +180,7 @@ export function panelView(session) {
     );
   }
   buttons.push(
+    new ButtonBuilder().setCustomId(`panel:rename:${session.id}`).setLabel('Namen ändern').setEmoji('✏️').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`panel:close:${session.id}`).setLabel('Ohne Gewinner schließen').setStyle(ButtonStyle.Danger),
   );
   rows.push(new ActionRowBuilder().addComponents(buttons));
@@ -280,6 +285,24 @@ export function starterContent(session) {
   else if (session.rollsLocked) status = '⏹️ **Rollzeit vorbei** · der Leader wählt den Gewinner';
   else status = `🎲 **Verlosung läuft** · endet ${ts(session.endsAt, 'f')} (${ts(session.endsAt, 'R')})`;
   return `## ${ITEM_ICON} ${item.name}\n${status}\n-# 👥 ${c.total} Spieler${link} · Würfeln & Passen im Thread ↓`;
+}
+
+/** Eingabefenster zum Umbenennen eines Items (scope: 'draft' oder 'panel'). */
+export function renameModal(scope, id, currentName) {
+  return new ModalBuilder()
+    .setCustomId(`rename:${scope}:${id}`)
+    .setTitle('Item-Namen ändern')
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('name')
+          .setLabel('Name des Items')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(90)
+          .setValue(currentName.slice(0, 90)),
+      ),
+    );
 }
 
 /** Eine Zeile für /loot offen. */
