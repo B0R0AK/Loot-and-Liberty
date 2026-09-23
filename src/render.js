@@ -121,7 +121,7 @@ export function lootEmbed(session) {
     embed.setFooter({ text: 'Ohne Gewinner geschlossen' });
   } else {
     embed.setFooter({
-      text: `Würfel 1–${session.rollMax} · ${c.total - c.pending}/${c.total} entschieden · Wähle unten, wofür du rollst, oder passe.`,
+      text: `Würfel 1–${session.rollMax} · ${c.total - c.pending}/${c.total} entschieden · Nur ausgewählte Spieler können würfeln oder passen.`,
     });
   }
   return embed;

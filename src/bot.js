@@ -210,7 +210,7 @@ export function createLootBot({ client, store, lootChannelIds = [], leaderRoleId
 
   const REASON_TEXT = {
     closed: 'Diese Verlosung ist bereits beendet.',
-    'not-eligible': 'Du bist für dieses Item nicht eingetragen.',
+    'not-eligible': 'Du wurdest für dieses Item nicht ausgewählt und kannst nicht würfeln.',
     'bad-purpose': 'Unbekannte Auswahl.',
     'not-rolled': 'Dieser Spieler hat nicht gewürfelt.',
   };
