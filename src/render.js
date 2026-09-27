@@ -8,6 +8,7 @@ import {
   StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
+  UserSelectMenuBuilder,
 } from 'discord.js';
 import { PURPOSES, Status, purposeById } from './session.js';
 
@@ -145,24 +146,16 @@ export function panelView(session) {
         .setMaxValues(MAX_SELECT),
     ),
   );
-  const decided = session.decided().slice(0, MAX_SELECT);
-  if (decided.length && session.rollingOpen) {
-    rows.push(
-      new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId(`panel:reset:${session.id}`)
-          .setPlaceholder('↩️ Entscheidung zurücksetzen …')
-          .addOptions(
-            decided.map((d) => ({
-              label: session.nameOf(d.userId).slice(0, 100),
-              description: d.status === Status.ROLLED ? `${d.roll} · ${purposeById(d.purpose).label}` : d.roll === null ? 'gepasst' : `gepasst (hatte ${d.roll})`,
-              emoji: d.status === Status.ROLLED ? '🎲' : '🚫',
-              value: d.userId,
-            })),
-          ),
-      ),
-    );
-  }
+  // Nutzer-Auswahl statt fester Liste: mit Suche und ohne 25er-Limit.
+  rows.push(
+    new ActionRowBuilder().addComponents(
+      new UserSelectMenuBuilder()
+        .setCustomId(`panel:member:${session.id}`)
+        .setPlaceholder('👤 Spieler verwalten – zurücksetzen oder entfernen …')
+        .setMinValues(1)
+        .setMaxValues(1),
+    ),
+  );
   if (session.rollingOpen) {
     rows.push(
       new ActionRowBuilder().addComponents(
@@ -315,6 +308,43 @@ export function summaryEmbed(session, imageName = null, { forLootChannel = false
   return embed;
 }
 
+/** Status eines Teilnehmers in einer Zeile, z. B. „🎲 87 · ⭐ BiS-Item“. */
+export function participantStatus(p) {
+  if (p.status === Status.ROLLED) {
+    const purpose = purposeById(p.purpose);
+    return `🎲 **${p.roll}** · ${purpose.emoji} ${purpose.label}`;
+  }
+  if (p.status === Status.PASSED) return p.roll === null ? '🚫 gepasst' : `🚫 gepasst (hatte ~~${p.roll}~~)`;
+  return '⏳ noch keine Entscheidung';
+}
+
+/** Kleines Fenster (nur für den Leader sichtbar) nach Auswahl eines Spielers im Panel. */
+export function memberActionView(session, userId) {
+  const p = session.participants.get(userId);
+  if (!p) {
+    return { content: `<@${userId}> ist bei **${session.item.name}** nicht dabei. Über „➕ Spieler hinzufügen“ kannst du ihn aufnehmen.`, components: [] };
+  }
+  const canReset = session.rollingOpen && p.status !== Status.PENDING;
+  return {
+    content: `👤 <@${userId}> bei **${session.item.name}**\n${participantStatus(p)}`,
+    components: [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`member:reset:${session.id}:${userId}`)
+          .setLabel('Entscheidung zurücksetzen')
+          .setEmoji('↩️')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(!canReset),
+        new ButtonBuilder()
+          .setCustomId(`member:remove:${session.id}:${userId}`)
+          .setLabel('Aus Verlosung entfernen')
+          .setEmoji('➖')
+          .setStyle(ButtonStyle.Danger),
+      ),
+    ],
+  };
+}
+
 /** Eingabefenster zum Umbenennen eines Items (scope: 'draft' oder 'panel'). */
 export function renameModal(scope, id, currentName) {
   return new ModalBuilder()
@@ -348,7 +378,7 @@ export const HELP_TEXT = [
   '2. Im Fenster darunter wählen sie, **wer rollen darf**, **wer verwaltet** und die **Rollzeit**.',
   '3. Der Bot postet das Item im **Loot-Kanal** mit Thread und pingt die Spieler an.',
   '4. Spieler wählen im Thread, wofür sie würfeln (⭐ BiS · 💧 Watermark · 📜 Lithografie · 💰 Verkauf · ✨ Potential), oder passen – auch noch nach dem Würfeln. Neu würfeln geht nur, wenn der Leader sie zurücksetzt.',
-  '5. Die Verwalter wählen im **Leader-Panel** den Gewinner. Dort können sie auch Spieler hinzufügen, Entscheidungen zurücksetzen und die Rollzeit ändern.',
+  '5. Die Verwalter wählen im **Leader-Panel** den Gewinner. Dort können sie auch Spieler hinzufügen, zurücksetzen oder entfernen und die Rollzeit ändern.',
   '',
   '**Befehle**',
   '`/loot offen` – laufende Verlosungen (Leader)',

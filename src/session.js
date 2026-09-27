@@ -140,6 +140,18 @@ export class LootSession {
     return { ok: true };
   }
 
+  /**
+   * Spieler aus der Verlosung entfernen (auch nach Ende der Rollzeit, solange kein Gewinner feststeht).
+   * Sein Wurf fällt weg; wieder aufnehmen geht über „Hinzufügen“ – dann startet er neu.
+   */
+  removeParticipant(userId) {
+    if (this.closed) return { ok: false, reason: 'closed' };
+    const p = this.participants.get(userId);
+    if (!p) return { ok: false, reason: 'not-eligible' };
+    this.participants.delete(userId);
+    return { ok: true, participant: p };
+  }
+
   /** Nachträglich Spieler hinzufügen. Gibt die wirklich neuen IDs zurück. */
   addParticipants(ids, names = {}) {
     if (!this.rollingOpen) return [];

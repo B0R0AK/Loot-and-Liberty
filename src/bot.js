@@ -2,7 +2,19 @@ import { MessageFlags, PermissionFlagsBits } from 'discord.js';
 import { commands } from './commands.js';
 import { detectItem, fetchLinkPreview } from './item.js';
 import { renderItemCard } from './itemcard.js';
-import { HELP_TEXT, hoursLabel, lootPayload, openSessionLine, panelView, pingChunks, promptView, renameModal, starterContent, summaryEmbed } from './render.js';
+import {
+  HELP_TEXT,
+  hoursLabel,
+  lootPayload,
+  memberActionView,
+  openSessionLine,
+  panelView,
+  pingChunks,
+  promptView,
+  renameModal,
+  starterContent,
+  summaryEmbed,
+} from './render.js';
 import { LootSession, purposeById } from './session.js';
 
 const DRAFT_TTL_MS = 30 * 60_000;
@@ -377,7 +389,14 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
   /** Roll-Liste im Thread, Leader-Panel und (bei Statuswechsel) die Item-Nachricht neu zeichnen. */
   function render(session, { starter = false } = {}) {
     const jobs = [
-      queueEdit(`thread:${session.id}`, async () => (await channel(session.threadId)).messages.edit(session.messageId, lootPayload(session))),
+      queueEdit(`thread:${session.id}`, async () => {
+        try {
+          await (await channel(session.threadId)).messages.edit(session.messageId, lootPayload(session));
+        } catch (err) {
+          // 50083 = Thread ist archiviert (nach der Rollzeit). Die Liste wird beim Abschluss aktualisiert.
+          if (err.code !== 50083) throw err;
+        }
+      }),
       queueEdit(`panel:${session.id}`, async () => (await channel(session.panelChannelId)).messages.edit(session.panelMessageId, panelView(session))),
     ];
     if (starter) jobs.push(queueEdit(`starter:${session.id}`, () => editStarter(session)));
@@ -497,18 +516,15 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       return;
     }
 
+    if (action === 'member') {
+      return interaction.reply({ ...memberActionView(session, interaction.values[0]), flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
+    }
+
+    // Alte Panels (vor „Spieler verwalten“) haben noch das Zurücksetzen-Menü.
     if (action === 'reset') {
-      const userId = interaction.values[0];
-      const res = session.reset(userId);
-      if (!res.ok) return interaction.reply(ephemeral(failText(res)));
       await interaction.deferUpdate();
-      store.save();
-      await render(session);
-      const thread = await channel(session.threadId);
-      await thread.send({
-        content: `↩️ <@${userId}>, deine Entscheidung wurde vom Leader zurückgesetzt – du kannst neu wählen.`,
-        allowedMentions: { users: [userId] },
-      });
+      const res = await resetMember(session, interaction.values[0]);
+      if (!res.ok) await interaction.followUp(ephemeral(failText(res)));
       return;
     }
 
@@ -524,6 +540,46 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       await render(session);
       await pingPlayers(await channel(session.threadId), added, `➕ Nachträglich dabei bei **${session.item.name}**: `);
     }
+  }
+
+  // ---------- Spieler verwalten: zurücksetzen / entfernen ----------
+
+  async function resetMember(session, userId) {
+    const res = session.reset(userId);
+    if (!res.ok) return res;
+    store.save();
+    await render(session);
+    const thread = await channel(session.threadId);
+    await thread.send({
+      content: `↩️ <@${userId}>, deine Entscheidung wurde vom Leader zurückgesetzt – du kannst neu wählen.`,
+      allowedMentions: { users: [userId] },
+    });
+    return res;
+  }
+
+  async function removeMember(session, userId) {
+    const res = session.removeParticipant(userId);
+    if (!res.ok) return res;
+    store.save();
+    await render(session);
+    const thread = await channel(session.threadId);
+    if (!thread.archived) {
+      await thread.send({ content: `➖ <@${userId}> wurde vom Leader aus der Verlosung entfernt.`, allowedMentions: { parse: [] } });
+    }
+    return res;
+  }
+
+  /** Knöpfe aus dem kleinen Fenster nach „👤 Spieler verwalten“. */
+  async function handleMemberAction(interaction, action, sessionId, userId) {
+    const session = store.get(sessionId);
+    if (!session) return interaction.update({ content: 'Diese Verlosung ist nicht mehr aktiv.', components: [] });
+    if (!mayManage(interaction, session)) {
+      return interaction.reply(ephemeral('Diese Verlosung verwalten nur die dafür ausgewählten Leader.'));
+    }
+    await interaction.deferUpdate();
+    const res = action === 'remove' ? await removeMember(session, userId) : await resetMember(session, userId);
+    const done = action === 'remove' ? `➖ <@${userId}> wurde aus **${session.item.name}** entfernt.` : `↩️ Entscheidung von <@${userId}> zurückgesetzt.`;
+    return interaction.editReply({ content: res.ok ? done : `⚠️ ${failText(res)}`, components: [], allowedMentions: { parse: [] } });
   }
 
   // ---------- Item umbenennen (Eingabefenster) ----------
@@ -646,7 +702,8 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
         return;
       }
       if (!interaction.isMessageComponent()) return;
-      const [scope, action, id] = interaction.customId.split(':');
+      const [scope, action, id, extra] = interaction.customId.split(':');
+      if (scope === 'member') return await handleMemberAction(interaction, action, id, extra);
       if (scope === 'draft') return await handleDraft(interaction, action, id);
       if (scope === 'loot') return await handleLoot(interaction, action, id);
       if (scope === 'panel') return await handlePanel(interaction, action, id);
