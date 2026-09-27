@@ -28,7 +28,7 @@ test('Würfe nach Grund gruppiert, dann nach Wurf sortiert', () => {
   s.roll('c', 'bis', () => 70);
   s.roll('d', 'potential', () => 50);
   s.pass('e');
-  assert.deepEqual(s.rolls().map((r) => r.userId), ['c', 'b', 'a', 'd']);
+  assert.deepEqual(s.rolls().map((r) => r.userId), ['c', 'b', 'd', 'a']);
   assert.deepEqual(s.withStatus(Status.PASSED), ['e']);
   assert.equal(s.allDecided, true);
 });
@@ -235,12 +235,13 @@ test('Spieler entfernen: Wurf fällt weg, kann nicht mehr würfeln, wieder hinzu
   assert.equal(t.participants.get('a').status, Status.PENDING);
 });
 
-test('Neue Gründe: Offspec, PvP, Vererbung – würfelbar und richtig einsortiert', () => {
-  const s = make(['a', 'b', 'c', 'd', 'e']);
-  s.roll('a', 'inherit', () => 90);
-  s.roll('b', 'pvp', () => 50);
-  s.roll('c', 'offspec', () => 30);
-  s.roll('d', 'bis', () => 10);
-  s.roll('e', 'sell', () => 99);
-  assert.deepEqual(s.rolls().map((r) => r.purpose), ['bis', 'offspec', 'pvp', 'inherit', 'sell']);
+test('Prio-Reihenfolge der Gründe', async () => {
+  const { PURPOSES } = await import('../src/session.js');
+  assert.deepEqual(PURPOSES.map((p) => p.label), [
+    'BiS-Item', 'Potential', 'Watermark Upgrade', 'Vererbung', 'PvP', 'Offspec', 'Lithografie', 'Verkauf',
+  ]);
+  const s = make(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']);
+  const order = ['sell', 'litho', 'offspec', 'pvp', 'inherit', 'watermark', 'potential', 'bis'];
+  ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].forEach((id, i) => s.roll(id, order[i], () => 50 + i));
+  assert.deepEqual(s.rolls().map((r) => r.purpose), [...order].reverse());
 });
