@@ -208,3 +208,29 @@ test('Kleine Karte im Loot-Kanal: Rollzeit vorbei, dann Gewinner', async () => {
   assert.ok(won.timestamp);
   assert.match(summaryEmbed(s).toJSON().description, /🧵 <#t1> · 👑 <@owner>/);
 });
+
+test('Spieler entfernen: Wurf fällt weg, kann nicht mehr würfeln, wieder hinzufügbar', () => {
+  const s = make();
+  s.roll('a', 'bis', () => 90);
+  s.roll('b', 'bis', () => 40);
+  const res = s.removeParticipant('a');
+  assert.equal(res.ok, true);
+  assert.equal(res.participant.roll, 90);
+  assert.equal(s.isEligible('a'), false);
+  assert.deepEqual(s.rolls().map((r) => r.userId), ['b']);
+  assert.equal(s.roll('a', 'bis').reason, 'not-eligible');
+  assert.equal(s.chooseWinner('a').reason, 'not-rolled');
+  assert.equal(s.removeParticipant('a').reason, 'not-eligible');
+  assert.equal(s.counts().total, 2);
+
+  s.lockRolls();
+  assert.equal(s.removeParticipant('c').ok, true, 'auch nach Ende der Rollzeit');
+  s.chooseWinner('b');
+  assert.equal(s.removeParticipant('b').reason, 'closed');
+
+  const t = make(['a']);
+  t.roll('a', 'bis', () => 5);
+  t.removeParticipant('a');
+  assert.deepEqual(t.addParticipants(['a']), ['a']);
+  assert.equal(t.participants.get('a').status, Status.PENDING);
+});
