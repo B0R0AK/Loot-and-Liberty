@@ -234,3 +234,13 @@ test('Spieler entfernen: Wurf fällt weg, kann nicht mehr würfeln, wieder hinzu
   assert.deepEqual(t.addParticipants(['a']), ['a']);
   assert.equal(t.participants.get('a').status, Status.PENDING);
 });
+
+test('Neue Gründe: Offspec, PvP, Vererbung – würfelbar und richtig einsortiert', () => {
+  const s = make(['a', 'b', 'c', 'd', 'e']);
+  s.roll('a', 'inherit', () => 90);
+  s.roll('b', 'pvp', () => 50);
+  s.roll('c', 'offspec', () => 30);
+  s.roll('d', 'bis', () => 10);
+  s.roll('e', 'sell', () => 99);
+  assert.deepEqual(s.rolls().map((r) => r.purpose), ['bis', 'offspec', 'pvp', 'inherit', 'sell']);
+});

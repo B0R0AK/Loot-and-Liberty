@@ -377,7 +377,7 @@ export const HELP_TEXT = [
   '1. Leader posten einen Screenshot oder Questlog-Link im **Leader-Kanal**.',
   '2. Im Fenster darunter wählen sie, **wer rollen darf**, **wer verwaltet** und die **Rollzeit**.',
   '3. Der Bot postet das Item im **Loot-Kanal** mit Thread und pingt die Spieler an.',
-  '4. Spieler wählen im Thread, wofür sie würfeln (⭐ BiS · 💧 Watermark · 📜 Lithografie · 💰 Verkauf · ✨ Potential), oder passen – auch noch nach dem Würfeln. Neu würfeln geht nur, wenn der Leader sie zurücksetzt.',
+  `4. Spieler wählen im Thread, wofür sie würfeln (${PURPOSES.map((p) => `${p.emoji} ${p.label}`).join(' · ')}), oder passen – auch noch nach dem Würfeln. Neu würfeln geht nur, wenn der Leader sie zurücksetzt.`,
   '5. Die Verwalter wählen im **Leader-Panel** den Gewinner. Dort können sie auch Spieler hinzufügen, zurücksetzen oder entfernen und die Rollzeit ändern.',
   '',
   '**Befehle**',
