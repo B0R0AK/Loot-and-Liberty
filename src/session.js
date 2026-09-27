@@ -9,10 +9,13 @@ export const Status = Object.freeze({
 /** Wofür gewürfelt wird – in dieser Reihenfolge wird auch die Liste gruppiert. */
 export const PURPOSES = Object.freeze([
   { id: 'bis', label: 'BiS-Item', emoji: '⭐' },
+  { id: 'potential', label: 'Potential', emoji: '✨' },
   { id: 'watermark', label: 'Watermark Upgrade', emoji: '💧' },
+  { id: 'inherit', label: 'Vererbung', emoji: '🧬' },
+  { id: 'pvp', label: 'PvP', emoji: '⚔️' },
+  { id: 'offspec', label: 'Offspec', emoji: '🔄' },
   { id: 'litho', label: 'Lithografie', emoji: '📜' },
   { id: 'sell', label: 'Verkauf', emoji: '💰' },
-  { id: 'potential', label: 'Potential', emoji: '✨' },
 ]);
 
 export const purposeById = (id) => PURPOSES.find((p) => p.id === id);

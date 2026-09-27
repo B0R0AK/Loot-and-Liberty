@@ -19,7 +19,8 @@ Es gibt zwei Kanäle:
 3. **Der Bot postet das Item mit Bild im Loot-Kanal** und öffnet daran einen **Thread** mit der Roll-Liste.
    Alle Ausgewählten werden im Thread angepingt. Bei einer Rolle wird jedes Mitglied einzeln angepingt.
 4. **Die Spieler haben die gewählte Rollzeit**, Standard 24 Stunden. In der Zeit wählen sie, **wofür** sie rollen, und würfeln 1–100:
-   ⭐ BiS-Item · 💧 Watermark Upgrade · 📜 Lithografie · 💰 Verkauf · ✨ Potential.
+   ⭐ BiS-Item · ✨ Potential · 💧 Watermark Upgrade · 🧬 Vererbung · ⚔️ PvP · 🔄 Offspec · 📜 Lithografie · 💰 Verkauf.
+   Das ist die Prio-Reihenfolge: In dieser Reihenfolge werden die Würfe in der Roll-Liste gruppiert (`PURPOSES` in `src/session.js`).
    Oder sie klicken **🚫 Passen**, auch noch nachdem sie gewürfelt haben. Ihr Wurf zählt dann nicht mehr und steht durchgestrichen bei „Gepasst“.
    Erneut würfeln geht nur, wenn ein Verwalter die Entscheidung zurücksetzt. Nur ausgewählte Spieler können würfeln.
 5. **Roll-Liste:** Die Würfe sind nach Grund gruppiert (BiS zuerst) und darin nach Höhe sortiert.
