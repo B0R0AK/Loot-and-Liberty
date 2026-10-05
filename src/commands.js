@@ -48,9 +48,17 @@ export const lootCommand = new SlashCommandBuilder()
   .setDMPermission(false)
   .addSubcommand((s) => s.setName('offen').setDescription('Alle laufenden Verlosungen anzeigen (nur Leader)'));
 
+export const groupCommand = new SlashCommandBuilder()
+  .setName('gruppe')
+  .setDescription('Teilnehmer für den Tag festlegen – jeder Screenshot wird dann sofort verlost (nur Leader)')
+  .setDMPermission(false)
+  .addSubcommand((s) => s.setName('start').setDescription('Gruppe für heute festlegen (gilt max. 12 Stunden)'))
+  .addSubcommand((s) => s.setName('ende').setDescription('Deine Gruppe beenden – danach wieder Auswahl pro Item'))
+  .addSubcommand((s) => s.setName('status').setDescription('Deine aktive Gruppe anzeigen'));
+
 export const helpCommand = new SlashCommandBuilder()
   .setName('hilfe')
   .setDescription('Wie funktioniert Loot and Liberty?')
   .setDMPermission(false);
 
-export const commands = [leaderCommand, setupCommand, lootCommand, helpCommand];
+export const commands = [leaderCommand, setupCommand, lootCommand, groupCommand, helpCommand];

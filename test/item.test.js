@@ -135,3 +135,16 @@ test('Item-Karte: Werte wie im Spiel-Tooltip (Calanthias Aegis, echte Questlog-D
   });
   assert.equal(gradeInfo(51).en, 'Heroic');
 });
+
+test('detectItems: mehrere Screenshots in einer Nachricht = mehrere Items', async () => {
+  const { detectItems } = await import('../src/item.js');
+  const img = (n) => ({ url: `https://cdn/${n}.png`, contentType: 'image/png' });
+  const five = detectItems({ content: 'Gildenboss <@1>', attachments: [img(1), img(2), img(3), img(4), img(5)] });
+  assert.equal(five.length, 5);
+  assert.deepEqual(five.map((i) => i.name), ['Gildenboss 1/5', 'Gildenboss 2/5', 'Gildenboss 3/5', 'Gildenboss 4/5', 'Gildenboss 5/5']);
+  assert.equal(five[2].image, 'https://cdn/3.png');
+  assert.deepEqual(detectItems({ attachments: [img(1), img(2)] }).map((i) => i.name), ['Loot 1/2', 'Loot 2/2']);
+  assert.equal(detectItems({ content: 'Schwert', attachments: [img(1)] })[0].name, 'Schwert');
+  assert.deepEqual(detectItems({ content: 'hallo' }), []);
+  assert.equal(detectItems({ attachments: [img(1), { url: 'x.txt', contentType: 'text/plain' }] }).length, 1);
+});

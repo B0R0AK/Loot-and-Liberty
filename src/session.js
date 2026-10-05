@@ -55,6 +55,8 @@ export class LootSession {
     /** Hinweise im Leader-Kanal („Rollen beendet“ …) – werden nach dem Abschluss aufgeräumt. */
     this.noticeIds = rest.noticeIds ?? [];
     this.sourceUrl = rest.sourceUrl ?? null;
+    /** Nachricht des Leaders im Leader-Kanal (mehrere Verlosungen können sich eine teilen). */
+    this.sourceMessageId = rest.sourceMessageId ?? id;
     this.createdAt = rest.createdAt ?? Date.now();
     this.closed = false;
     this.closeReason = null;

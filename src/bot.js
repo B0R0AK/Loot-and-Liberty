@@ -1,9 +1,11 @@
 import { MessageFlags, PermissionFlagsBits } from 'discord.js';
 import { commands } from './commands.js';
-import { detectItem, fetchLinkPreview } from './item.js';
+import { detectItems, fetchLinkPreview } from './item.js';
 import { renderItemCard } from './itemcard.js';
 import {
   HELP_TEXT,
+  groupDraftView,
+  groupStatusText,
   hoursLabel,
   lootPayload,
   memberActionView,
@@ -18,6 +20,7 @@ import {
 import { LootSession, purposeById } from './session.js';
 
 const DRAFT_TTL_MS = 30 * 60_000;
+const GROUP_MAX_HOURS = 12;
 const HOUR = 3_600_000;
 
 /**
@@ -28,8 +31,10 @@ const HOUR = 3_600_000;
  *  4. Leader wählt im Panel (Leader-Kanal) den Gewinner
  */
 export function createLootBot({ client, store, botAdminIds = [] }) {
-  /** Gepostete Items, für die noch ausgewählt wird, wer rollen darf. Key = ID des Leader-Posts. */
+  /** Gepostete Items, für die noch ausgewählt wird, wer rollen darf. Key = ID des Leader-Posts (+ "-n" bei mehreren Bildern). */
   const drafts = new Map();
+  /** Offene /gruppe-start-Fenster. Key = Interaction-ID. */
+  const groupDrafts = new Map();
   /** Serialisierte Edits pro Nachricht, damit immer der neueste Stand zuletzt ankommt. */
   const editChains = new Map();
   /** Timer für das Ende der Rollzeit. */
@@ -98,11 +103,11 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     const cfg = store.guild(message.guild.id);
     if (!cfg.leaderChannelId || message.channelId !== cfg.leaderChannelId) return;
 
-    const item = detectItem({
+    const items = detectItems({
       content: message.content,
       attachments: [...message.attachments.values()].map((a) => ({ url: a.url, contentType: a.contentType })),
     });
-    if (!item) return addMentionsToDraft(message);
+    if (!items.length) return addMentionsToDraft(message);
 
     if (!isLeader(whoWrote(message))) {
       return message.reply({ content: 'Nur Loot-Leader können Items verlosen. Ein Bot-Admin kann dich mit `/leader hinzufügen` freischalten.', allowedMentions: { parse: [] } });
@@ -111,44 +116,94 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       return message.reply('Es ist noch kein Loot-Kanal eingerichtet. Ein Bot-Admin kann das mit `/einrichten lootkanal:#kanal` tun.');
     }
 
-    let imageFile = null;
-    if (item.url && (!item.nameFromInput || !item.image)) {
-      const preview = await fetchLinkPreview(item.url);
-      if (!item.nameFromInput && preview.title) item.name = preview.title.slice(0, 90);
-      item.image ??= preview.image ?? null;
-      // Nur Questlog-Link, kein Screenshot → Item-Karte mit Stats selbst zeichnen.
-      if (!item.image && preview.questlog) {
-        try {
-          imageFile = { attachment: await renderItemCard(preview.questlog), name: 'item.png' };
-        } catch (err) {
-          console.error('Item-Karte konnte nicht erzeugt werden:', err.message);
-        }
-      }
+    const multi = items.length > 1;
+    const prepared = [];
+    for (const [index, item] of items.entries()) {
+      prepared.push({ index, item, file: await prepareItem(item) });
     }
 
+    const group = store.getGroup(message.guild.id, message.author.id);
+    if (group) return autoLoot(message, cfg, group, prepared, multi);
+
+    for (const p of prepared) await createDraft(message, cfg, p, multi);
+  }
+
+  /** Name/Bild aus dem Questlog-Link holen; ohne Screenshot die Item-Karte zeichnen. */
+  async function prepareItem(item) {
+    if (!item.url || (item.nameFromInput && item.image)) return null;
+    const preview = await fetchLinkPreview(item.url);
+    if (!item.nameFromInput && preview.title) item.name = preview.title.slice(0, 90);
+    item.image ??= preview.image ?? null;
+    if (item.image || !preview.questlog) return null;
+    try {
+      return { attachment: await renderItemCard(preview.questlog), name: 'item.png' };
+    } catch (err) {
+      console.error('Item-Karte konnte nicht erzeugt werden:', err.message);
+      return null;
+    }
+  }
+
+  const draftId = (message, index) => (index === 0 ? message.id : `${message.id}-${index}`);
+
+  /** Bei mehreren Bildern in einer Nachricht bekommt jedes Fenster/Panel sein Bild, damit klar ist, welches gemeint ist. */
+  const panelFiles = (p, multi) => (p.file ? [p.file] : multi && p.item.image ? [imageFile(p.item.image)] : []);
+
+  async function createDraft(message, cfg, p, multi) {
     const draft = {
-      id: message.id,
+      id: draftId(message, p.index),
+      sourceMessageId: message.id,
       authorId: message.author.id,
       lootChannelId: cfg.lootChannelId,
-      item,
+      item: p.item,
       selection: mentionsOf(message),
       managers: { users: [], roles: [] },
       rollHours: cfg.rollHours,
-      imageFile,
+      imageFile: p.file,
       prompt: null,
     };
     drafts.set(draft.id, draft);
-    draft.prompt = await message.reply({
-      ...promptView(draft),
-      ...(imageFile ? { files: [imageFile] } : {}),
-      allowedMentions: { parse: [] },
-    });
+    draft.prompt = await message.reply({ ...promptView(draft), files: panelFiles(p, multi), allowedMentions: { parse: [] } });
 
     setTimeout(async () => {
       if (drafts.get(draft.id) !== draft) return;
       drafts.delete(draft.id);
       await draft.prompt.edit({ content: '⌛ Abgelaufen – poste das Item einfach neu.', embeds: [], components: [], attachments: [] }).catch(() => {});
     }, DRAFT_TTL_MS).unref();
+  }
+
+  /** Aktive Tagesgruppe: jedes Item sofort mit der Gruppe verlosen – ohne Rückfrage. */
+  async function autoLoot(message, cfg, group, prepared, multi) {
+    const members = await resolveMembers(message.guild, group.selection);
+    if (!members.size) {
+      return message.reply({ content: '⚠️ In deiner Gruppe sind keine (menschlichen) Mitglieder. Starte sie mit `/gruppe start` neu.', allowedMentions: { parse: [] } });
+    }
+    let started = 0;
+    for (const p of prepared) {
+      try {
+        const panel = await message.reply({
+          content: `⏳ **${p.item.name}** wird verlost …`,
+          files: panelFiles(p, multi),
+          allowedMentions: { parse: [] },
+        });
+        const draft = {
+          id: draftId(message, p.index),
+          sourceMessageId: message.id,
+          authorId: message.author.id,
+          lootChannelId: cfg.lootChannelId,
+          item: p.item,
+          managers: group.managers,
+          rollHours: group.rollHours,
+          imageFile: p.file,
+        };
+        await startLoot({ guild: message.guild, draft, members, panelMessage: panel });
+        started++;
+      } catch (err) {
+        console.error(`Gruppe: ${p.item.name} konnte nicht verlost werden:`, err);
+      }
+    }
+    group.count = (group.count ?? 0) + started;
+    store.setGroup(group);
+    await message.react('📋').catch(() => {});
   }
 
   /** Nachtrag „@Name @Rolle“ im Leader-Kanal für das offene Item desselben Leaders. */
@@ -205,7 +260,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       const members = await resolveMembers(interaction.guild, draft.selection);
       if (!members.size) return interaction.followUp(ephemeral('⚠️ In der Auswahl sind keine (menschlichen) Mitglieder.'));
       drafts.delete(id);
-      await startLoot(interaction, draft, members);
+      await startLoot({ guild: interaction.guild, draft, members, panelMessage: interaction.message });
     }
   }
 
@@ -216,7 +271,8 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     return { attachment: url, name: `item.${ext.toLowerCase()}` };
   }
 
-  async function startLoot(interaction, draft, members) {
+  /** Item im Loot-Kanal posten, Thread + Roll-Liste, Spieler pingen; panelMessage wird zum Leader-Panel. */
+  async function startLoot({ guild, draft, members, panelMessage }) {
     const lootChannel = await channel(draft.lootChannelId);
     const session = new LootSession({
       id: draft.id,
@@ -225,10 +281,11 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       eligibleIds: [...members.keys()],
       names: namesOf(members),
       managers: draft.managers,
-      guildId: interaction.guildId,
+      guildId: guild.id,
       channelId: lootChannel.id,
-      panelChannelId: interaction.channelId,
-      panelMessageId: interaction.message.id,
+      panelChannelId: panelMessage.channelId,
+      panelMessageId: panelMessage.id,
+      sourceMessageId: draft.sourceMessageId ?? draft.id,
       endsAt: Date.now() + draft.rollHours * HOUR,
     });
 
@@ -248,7 +305,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     scheduleLock(session);
 
     await pingPlayers(thread, [...members.keys()], `🔔 **${session.item.name}** – ihr seid dran! Wählt oben, wofür ihr rollt, oder passt. `);
-    await interaction.editReply(panelView(session));
+    await panelMessage.edit({ ...panelView(session), allowedMentions: { parse: [] } });
   }
 
   async function pingPlayers(thread, ids, prefix) {
@@ -343,7 +400,10 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       });
     }
 
-    for (const id of [session.panelMessageId, ...session.noticeIds, session.id]) {
+    // Den Leader-Post erst löschen, wenn alle Items daraus (mehrere Bilder) abgeschlossen sind.
+    const sourceStillUsed = [...store.sessions.values()].some((s) => s.id !== session.id && s.sourceMessageId === session.sourceMessageId);
+    const toDelete = [session.panelMessageId, ...session.noticeIds, ...(sourceStillUsed ? [] : [session.sourceMessageId])];
+    for (const id of toDelete) {
       await leaderChannel.messages.delete(id).catch((err) => console.warn(`Aufräumen: Nachricht ${id} nicht gelöscht (${err.message})`));
     }
   }
@@ -582,6 +642,92 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     return interaction.editReply({ content: res.ok ? done : `⚠️ ${failText(res)}`, components: [], allowedMentions: { parse: [] } });
   }
 
+  // ---------- Tagesgruppe: /gruppe start | ende | status ----------
+
+  async function handleGroupCommand(interaction) {
+    if (!isLeader(whoInteracts(interaction))) return interaction.reply(ephemeral('Nur Loot-Leader können Gruppen anlegen.'));
+    const sub = interaction.options.getSubcommand();
+    const current = store.getGroup(interaction.guildId, interaction.user.id);
+
+    if (sub === 'status') {
+      return interaction.reply(ephemeral(current ? groupStatusText(current) : 'Du hast gerade keine aktive Gruppe. Starte eine mit `/gruppe start`.'));
+    }
+    if (sub === 'ende') {
+      const ended = store.endGroup(interaction.guildId, interaction.user.id);
+      return interaction.reply(
+        ephemeral(
+          ended
+            ? `✅ Gruppe beendet (${ended.count ?? 0} Item(s) verlost). Ab jetzt wählst du wieder pro Item aus, wer rollen darf.`
+            : 'Du hast gerade keine aktive Gruppe.',
+        ),
+      );
+    }
+
+    const cfg = store.guild(interaction.guildId);
+    if (!cfg.leaderChannelId || !cfg.lootChannelId) {
+      return interaction.reply(ephemeral('Erst Leader- und Loot-Kanal einrichten: `/einrichten`.'));
+    }
+    const gd = {
+      id: interaction.id,
+      guildId: interaction.guildId,
+      leaderId: interaction.user.id,
+      selection: current?.selection ?? { users: [], roles: [] },
+      managers: current?.managers ?? { users: [], roles: [] },
+      rollHours: current?.rollHours ?? cfg.rollHours,
+    };
+    groupDrafts.set(gd.id, gd);
+    setTimeout(() => groupDrafts.delete(gd.id), DRAFT_TTL_MS).unref();
+    return interaction.reply({ ...groupDraftView(gd), flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
+  }
+
+  async function handleGroupDraft(interaction, action, id) {
+    const gd = groupDrafts.get(id);
+    if (!gd) return interaction.update({ content: '⌛ Abgelaufen – starte nochmal mit `/gruppe start`.', embeds: [], components: [] });
+
+    if (action === 'select') {
+      gd.selection = { roles: [...interaction.roles.keys()], users: [...interaction.users.keys()] };
+      return interaction.update(groupDraftView(gd));
+    }
+    if (action === 'managers') {
+      gd.managers = {
+        roles: [...interaction.roles.keys()].filter((r) => r !== interaction.guildId),
+        users: [...interaction.users.values()].filter((u) => !u.bot && u.id !== gd.leaderId).map((u) => u.id),
+      };
+      return interaction.update(groupDraftView(gd));
+    }
+    if (action === 'hours') {
+      gd.rollHours = Number(interaction.values[0]);
+      return interaction.update(groupDraftView(gd));
+    }
+    if (action === 'cancel') {
+      groupDrafts.delete(id);
+      return interaction.update({ content: 'Abgebrochen – keine Gruppe gestartet.', embeds: [], components: [] });
+    }
+    if (action === 'start') {
+      await interaction.deferUpdate();
+      const members = await resolveMembers(interaction.guild, gd.selection);
+      if (!members.size) return interaction.followUp(ephemeral('⚠️ In der Auswahl sind keine (menschlichen) Mitglieder.'));
+      groupDrafts.delete(id);
+      const now = Date.now();
+      const group = store.setGroup({
+        guildId: gd.guildId,
+        leaderId: gd.leaderId,
+        selection: gd.selection,
+        managers: gd.managers,
+        rollHours: gd.rollHours,
+        createdAt: now,
+        expiresAt: now + GROUP_MAX_HOURS * HOUR,
+        count: 0,
+      });
+      return interaction.editReply({
+        content: `${groupStatusText(group)}\n-# ${members.size} Spieler aufgelöst.`,
+        embeds: [],
+        components: [],
+        allowedMentions: { parse: [] },
+      });
+    }
+  }
+
   // ---------- Item umbenennen (Eingabefenster) ----------
 
   async function handleRename(interaction, scope, id) {
@@ -693,6 +839,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
         if (interaction.commandName === 'leader') return await handleLeaderCommand(interaction);
         if (interaction.commandName === 'einrichten') return await handleSetupCommand(interaction);
         if (interaction.commandName === 'loot') return await handleLootCommand(interaction);
+        if (interaction.commandName === 'gruppe') return await handleGroupCommand(interaction);
         if (interaction.commandName === 'hilfe') return await interaction.reply(ephemeral(HELP_TEXT));
         return;
       }
@@ -705,6 +852,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       const [scope, action, id, extra] = interaction.customId.split(':');
       if (scope === 'member') return await handleMemberAction(interaction, action, id, extra);
       if (scope === 'draft') return await handleDraft(interaction, action, id);
+      if (scope === 'group') return await handleGroupDraft(interaction, action, id);
       if (scope === 'loot') return await handleLoot(interaction, action, id);
       if (scope === 'panel') return await handlePanel(interaction, action, id);
     } catch (err) {
