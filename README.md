@@ -40,6 +40,17 @@ Es gibt zwei Kanäle:
 8. **Aufräumen:** Nach der Vergabe, oder wenn ohne Gewinner geschlossen wird, löscht der Bot im Leader-Kanal den Item-Post, das Panel und die Hinweise.
    Stattdessen postet er eine **kompakte Ergebnis-Karte** mit kleinem Item-Bild, Gewinner, Wurf, Grund und Link zum Thread.
 
+### Mehrere Items auf einmal (z. B. Gildenboss)
+
+1. Der Leader legt **einmal** fest, wer heute dabei war: `/gruppe start`. Im Fenster wählt er Spieler oder Rollen, Verwalter und Rollzeit.
+2. Danach postet er die Screenshots im Leader-Kanal, **einzeln oder alle in einer Nachricht**.
+   Jedes Bild wird **sofort** zu einer eigenen Verlosung mit Item-Post, Thread, Pings und Panel, ohne Rückfrage.
+   Bei mehreren Bildern ohne Text heißen die Items „Loot 1/5“, „Loot 2/5“ … Mit Text, z. B. „Gildenboss“, heißen sie „Gildenboss 1/5“ … Umbenennen geht im Panel.
+3. Die Gruppe gilt bis `/gruppe ende`, höchstens aber 12 Stunden. `/gruppe status` zeigt sie an.
+   Ohne aktive Gruppe gibt es wie gewohnt pro Item das Fenster „Wer darf rollen?“, auch bei mehreren Bildern in einer Nachricht.
+
+Jeder Leader hat seine eigene Gruppe. Der Leader-Post mit mehreren Bildern wird erst gelöscht, wenn alle Items daraus abgeschlossen sind.
+
 ## Rechte
 
 | Wer | Darf |
@@ -55,6 +66,7 @@ Es gibt zwei Kanäle:
 - `/leader entfernen wer:@Name`: entzieht die Leader-Rechte.
 - `/leader liste`: zeigt alle Loot-Leader.
 - `/einrichten leaderkanal:#loot-leitung lootkanal:#loot rollzeit:24`: legt die Kanäle und die Standard-Rollzeit in Stunden fest. Jede Angabe ist optional. Ohne Angaben zeigt der Befehl die aktuelle Einstellung.
+- `/gruppe start` · `/gruppe ende` · `/gruppe status`: Teilnehmer für den Tag festlegen. Danach wird jeder Screenshot sofort verlost (Leader).
 - `/loot offen`: zeigt allen Leadern die laufenden Verlosungen mit Link zu Thread und Panel.
 - `/hilfe`: gibt eine kurze Übersicht über Ablauf und Befehle.
 

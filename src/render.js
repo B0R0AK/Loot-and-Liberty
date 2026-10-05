@@ -114,6 +114,70 @@ export function promptView(draft) {
   };
 }
 
+// ---------- Tagesgruppe (/gruppe start) ----------
+
+/** Fenster (nur für den Leader sichtbar): wer heute rollen darf, wer verwaltet, Rollzeit. */
+export function groupDraftView(gd) {
+  const picked = mentionList(gd.selection);
+  const embed = new EmbedBuilder()
+    .setColor(COLORS.prompt)
+    .setTitle('📋 Gruppe für heute')
+    .setDescription(
+      'Wähle, **wer heute rollen darf** – z. B. alle, die beim Gildenboss dabei waren.\n' +
+        '-# Danach wird jeder Screenshot, den du im Leader-Kanal postest, sofort mit dieser Gruppe verlost – ' +
+        'auch mehrere Bilder in einer Nachricht.',
+    )
+    .addFields(
+      { name: `🎲 Darf rollen${picked.length ? ` (${picked.length})` : ''}`, value: picked.length ? fit(picked, ' ') : '*noch niemand*' },
+      { name: '👑 Verwaltet von', value: fit(managerMentions(gd.leaderId, gd.managers), ' '), inline: true },
+      { name: '⏰ Rollzeit je Item', value: hoursLabel(gd.rollHours), inline: true },
+    );
+  return {
+    content: '',
+    embeds: [embed],
+    components: [
+      new ActionRowBuilder().addComponents(
+        new MentionableSelectMenuBuilder()
+          .setCustomId(`group:select:${gd.id}`)
+          .setPlaceholder('🎲 Wer darf heute rollen? Spieler oder Rollen …')
+          .setMinValues(1)
+          .setMaxValues(MAX_SELECT),
+      ),
+      new ActionRowBuilder().addComponents(
+        new MentionableSelectMenuBuilder()
+          .setCustomId(`group:managers:${gd.id}`)
+          .setPlaceholder('👑 Wer verwaltet? Leader oder Leader-Rollen (optional) …')
+          .setMinValues(0)
+          .setMaxValues(MAX_SELECT),
+      ),
+      new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder().setCustomId(`group:hours:${gd.id}`).setPlaceholder('⏰ Rollzeit …').addOptions(hourOptions(gd.rollHours)),
+      ),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`group:start:${gd.id}`)
+          .setLabel('Gruppe starten')
+          .setEmoji('✅')
+          .setStyle(ButtonStyle.Success)
+          .setDisabled(!picked.length),
+        new ButtonBuilder().setCustomId(`group:cancel:${gd.id}`).setLabel('Abbrechen').setStyle(ButtonStyle.Secondary),
+      ),
+    ],
+  };
+}
+
+/** Kurzinfo zu einer aktiven Gruppe. */
+export function groupStatusText(group) {
+  const picked = mentionList(group.selection);
+  return [
+    `📋 **Gruppe aktiv** – gilt bis ${ts(group.expiresAt, 't')} (${ts(group.expiresAt, 'R')}) oder \`/gruppe ende\``,
+    `🎲 **Darf rollen:** ${fit(picked, ' ', 1500)}`,
+    `👑 **Verwaltet von:** ${managerMentions(group.leaderId, group.managers).join(' ')} · ⏰ **Rollzeit:** ${hoursLabel(group.rollHours)}`,
+    `🗂️ **Bisher verlost:** ${group.count ?? 0} Item(s)`,
+    '-# Poste jetzt Screenshots oder Questlog-Links im Leader-Kanal – jeder wird sofort verlost.',
+  ].join('\n');
+}
+
 // ---------- Leader-Kanal: Verwaltungs-Panel ----------
 
 export function panelView(session) {
@@ -381,6 +445,7 @@ export const HELP_TEXT = [
   '5. Die Verwalter wählen im **Leader-Panel** den Gewinner. Dort können sie auch Spieler hinzufügen, zurücksetzen oder entfernen und die Rollzeit ändern.',
   '',
   '**Befehle**',
+  '`/gruppe start` · `/gruppe ende` · `/gruppe status` – Teilnehmer für den Tag festlegen, dann jeden Screenshot sofort verlosen (Leader)',
   '`/loot offen` – laufende Verlosungen (Leader)',
   '`/leader liste` – alle Loot-Leader',
   '`/leader hinzufügen` · `/leader entfernen` – Leader festlegen (Bot-Admins)',

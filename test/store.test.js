@@ -46,3 +46,23 @@ test('Rollzeit pro Server und offene Verlosungen', () => {
   for (const s of [a, b, c, d]) store.set(s);
   assert.deepEqual(store.openSessions('g').map((s) => s.id), ['b', 'a']);
 });
+
+test('Tagesgruppe: speichern, laden, ablaufen, beenden', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'loot-')), 'data.json');
+  const store = new SessionStore(file);
+  const now = Date.now();
+  store.setGroup({ guildId: 'g', leaderId: 'L', selection: { users: ['a'], roles: ['r'] }, managers: { users: [], roles: [] }, rollHours: 24, createdAt: now, expiresAt: now + 3600e3 });
+  store.flush();
+  clearTimeout(store.timer);
+
+  const loaded = new SessionStore(file).load();
+  assert.deepEqual(loaded.getGroup('g', 'L').selection, { users: ['a'], roles: ['r'] });
+  assert.equal(loaded.getGroup('g', 'other'), null);
+  assert.equal(loaded.getGroup('g', 'L', now + 3601e3), null, 'nach Ablauf weg');
+  assert.equal(loaded.getGroup('g', 'L'), null);
+
+  loaded.setGroup({ guildId: 'g', leaderId: 'L', expiresAt: now + 1000e3 });
+  assert.equal(loaded.endGroup('g', 'L').leaderId, 'L');
+  assert.equal(loaded.getGroup('g', 'L'), null);
+  clearTimeout(loaded.timer);
+});

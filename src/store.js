@@ -14,6 +14,8 @@ export class SessionStore {
     this.defaults = defaults;
     this.sessions = new Map();
     this.guilds = new Map();
+    /** Tagesgruppen: Key "guildId:leaderId" → { selection, managers, rollHours, expiresAt, … } */
+    this.groups = new Map();
     this.timer = null;
   }
 
@@ -23,6 +25,7 @@ export class SessionStore {
       const data = JSON.parse(readFileSync(this.file, 'utf8'));
       for (const raw of data.sessions ?? []) this.sessions.set(raw.id, LootSession.fromJSON(raw));
       for (const [id, cfg] of Object.entries(data.guilds ?? {})) this.guilds.set(id, { ...emptyGuild(), ...cfg });
+      for (const [key, group] of Object.entries(data.groups ?? {})) this.groups.set(key, group);
     } catch (err) {
       if (err.code !== 'ENOENT') console.error('Konnte gespeicherte Daten nicht laden:', err.message);
     }
@@ -86,6 +89,34 @@ export class SessionStore {
       .sort((a, b) => a.createdAt - b.createdAt);
   }
 
+  // ---------- Tagesgruppen ----------
+  // Ein Leader legt einmal fest, wer heute rollen darf; jeder Screenshot von ihm wird dann
+  // sofort mit dieser Gruppe verlost. Abgelaufene Gruppen gelten als nicht vorhanden.
+
+  getGroup(guildId, leaderId, now = Date.now()) {
+    const key = `${guildId}:${leaderId}`;
+    const group = this.groups.get(key);
+    if (group && group.expiresAt <= now) {
+      this.groups.delete(key);
+      this.save();
+      return null;
+    }
+    return group ?? null;
+  }
+
+  setGroup(group) {
+    this.groups.set(`${group.guildId}:${group.leaderId}`, group);
+    this.save();
+    return group;
+  }
+
+  endGroup(guildId, leaderId) {
+    const group = this.getGroup(guildId, leaderId);
+    this.groups.delete(`${guildId}:${leaderId}`);
+    this.save();
+    return group;
+  }
+
   // ---------- Datei ----------
 
   /** Verzögert und gebündelt schreiben. */
@@ -101,7 +132,11 @@ export class SessionStore {
     if (!this.file) return;
     mkdirSync(dirname(this.file), { recursive: true });
     const tmp = `${this.file}.tmp`;
-    const data = { sessions: [...this.sessions.values()], guilds: Object.fromEntries(this.guilds) };
+    const data = {
+      sessions: [...this.sessions.values()],
+      guilds: Object.fromEntries(this.guilds),
+      groups: Object.fromEntries(this.groups),
+    };
     writeFileSync(tmp, JSON.stringify(data, null, 2));
     renameSync(tmp, this.file);
   }

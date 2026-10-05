@@ -128,19 +128,34 @@ export function findQuestlogUrl(text = '') {
 }
 
 /**
- * Erkennt ein Item in einer Nachricht aus dem Loot-Kanal:
- * ein Bild-Anhang (Screenshot) und/oder ein Questlog-Link.
- * Gibt `null` zurück, wenn die Nachricht kein Item enthält.
+ * Erkennt Items in einer Nachricht aus dem Leader-Kanal: Jeder Bild-Anhang (Screenshot) ist ein
+ * eigenes Item – so lassen sich z. B. 5 Boss-Drops in einer Nachricht posten. Ohne Bild zählt ein
+ * Questlog-Link als ein Item. Text in der Nachricht wird zum Namen (bei mehreren Bildern nummeriert).
  */
-export function detectItem({ content = '', attachments = [] }) {
-  const image = attachments.find((a) => a.contentType?.startsWith('image/'));
+export function detectItems({ content = '', attachments = [] }) {
+  const images = attachments.filter((a) => a.contentType?.startsWith('image/'));
   const url = findQuestlogUrl(content);
-  if (!image && !url) return null;
-  const text = content.replace(URL_RE_ALL, ' ').replace(MENTION_RE, ' ').replace(/\s+/g, ' ').trim();
-  return {
-    name: (text || (url && nameFromUrl(url)) || 'Loot').slice(0, 90),
-    nameFromInput: Boolean(text),
-    url,
-    image: image?.url ?? null,
-  };
+  if (!images.length && !url) return [];
+  const text = content.replace(URL_RE_ALL, ' ').replace(MENTION_RE, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (images.length <= 1) {
+    return [
+      {
+        name: (text || (url && nameFromUrl(url)) || 'Loot').slice(0, 90),
+        nameFromInput: Boolean(text),
+        url,
+        image: images[0]?.url ?? null,
+      },
+    ];
+  }
+  return images.map((img, i) => ({
+    name: `${text || 'Loot'} ${i + 1}/${images.length}`,
+    nameFromInput: true,
+    url: null,
+    image: img.url,
+  }));
+}
+
+/** Erstes erkanntes Item oder null. */
+export function detectItem(message) {
+  return detectItems(message)[0] ?? null;
 }
