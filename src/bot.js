@@ -8,7 +8,7 @@ import {
   groupStatusText,
   hoursLabel,
   lootPayload,
-  memberActionView,
+  manageModal,
   openSessionLine,
   panelView,
   pingChunks,
@@ -576,9 +576,9 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       return;
     }
 
-    if (action === 'member') {
-      return interaction.reply({ ...memberActionView(session, interaction.values[0]), flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
-    }
+    if (action === 'manage') return interaction.showModal(manageModal(session));
+    // Alte Panels hatten statt des Knopfs eine Spieler-Auswahl – dann mit diesem Spieler vorbelegen.
+    if (action === 'member') return interaction.showModal(manageModal(session, interaction.values));
 
     // Alte Panels (vor „Spieler verwalten“) haben noch das Zurücksetzen-Menü.
     if (action === 'reset') {
@@ -604,11 +604,11 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
 
   // ---------- Spieler verwalten: zurücksetzen / entfernen ----------
 
-  async function resetMember(session, userId) {
+  async function resetMember(session, userId, { redraw = true } = {}) {
     const res = session.reset(userId);
     if (!res.ok) return res;
     store.save();
-    await render(session);
+    if (redraw) await render(session);
     const thread = await channel(session.threadId);
     await thread.send({
       content: `↩️ <@${userId}>, deine Entscheidung wurde vom Leader zurückgesetzt – du kannst neu wählen.`,
@@ -617,11 +617,11 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     return res;
   }
 
-  async function removeMember(session, userId) {
+  async function removeMember(session, userId, { redraw = true } = {}) {
     const res = session.removeParticipant(userId);
     if (!res.ok) return res;
     store.save();
-    await render(session);
+    if (redraw) await render(session);
     const thread = await channel(session.threadId);
     if (!thread.archived) {
       await thread.send({ content: `➖ <@${userId}> wurde vom Leader aus der Verlosung entfernt.`, allowedMentions: { parse: [] } });
@@ -629,17 +629,29 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     return res;
   }
 
-  /** Knöpfe aus dem kleinen Fenster nach „👤 Spieler verwalten“. */
-  async function handleMemberAction(interaction, action, sessionId, userId) {
+  /**
+   * Pop-up „Spieler verwalten“ bestätigt: Aktion auf alle gewählten Spieler anwenden.
+   * Bewusst ohne Antwort-Nachricht – nur das Panel aktualisiert sich an seiner Stelle.
+   */
+  async function handleManage(interaction, sessionId) {
     const session = store.get(sessionId);
-    if (!session) return interaction.update({ content: 'Diese Verlosung ist nicht mehr aktiv.', components: [] });
+    if (!session) return interaction.reply(ephemeral('Diese Verlosung ist nicht mehr aktiv.'));
     if (!mayManage(interaction, session)) {
       return interaction.reply(ephemeral('Diese Verlosung verwalten nur die dafür ausgewählten Leader.'));
     }
+    const userIds = [...interaction.fields.getSelectedUsers('users', true).keys()];
+    const action = interaction.fields.getStringSelectValues('action')[0];
     await interaction.deferUpdate();
-    const res = action === 'remove' ? await removeMember(session, userId) : await resetMember(session, userId);
-    const done = action === 'remove' ? `➖ <@${userId}> wurde aus **${session.item.name}** entfernt.` : `↩️ Entscheidung von <@${userId}> zurückgesetzt.`;
-    return interaction.editReply({ content: res.ok ? done : `⚠️ ${failText(res)}`, components: [], allowedMentions: { parse: [] } });
+
+    const failed = [];
+    for (const userId of userIds) {
+      const opts = { redraw: false }; // Panel und Liste nur einmal am Ende neu zeichnen
+      const res = action === 'reset' ? await resetMember(session, userId, opts) : await removeMember(session, userId, opts);
+      if (!res.ok) failed.push(`<@${userId}>: ${failText(res)}`);
+    }
+    if (failed.length < userIds.length) await render(session);
+    // Nur wenn gar nichts geklappt hat, ein kurzer Hinweis (sonst sieht man das Ergebnis im Panel).
+    if (failed.length === userIds.length) await interaction.followUp(ephemeral(`⚠️ ${failed.join('\n')}`));
   }
 
   // ---------- Tagesgruppe: /gruppe start | ende | status ----------
@@ -846,11 +858,11 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       if (interaction.isModalSubmit()) {
         const [kind, scope, id] = interaction.customId.split(':');
         if (kind === 'rename') return await handleRename(interaction, scope, id);
+        if (kind === 'manage') return await handleManage(interaction, scope);
         return;
       }
       if (!interaction.isMessageComponent()) return;
-      const [scope, action, id, extra] = interaction.customId.split(':');
-      if (scope === 'member') return await handleMemberAction(interaction, action, id, extra);
+      const [scope, action, id] = interaction.customId.split(':');
       if (scope === 'draft') return await handleDraft(interaction, action, id);
       if (scope === 'group') return await handleGroupDraft(interaction, action, id);
       if (scope === 'loot') return await handleLoot(interaction, action, id);

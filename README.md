@@ -32,7 +32,7 @@ Es gibt zwei Kanäle:
 7. **Leader-Panel** im Leader-Kanal, nur für die Verwalter dieser Verlosung:
    - 👑 **Gewinner auswählen**: Der Bot verkündet ihn im Thread und vermerkt ihn an der Item-Nachricht.
    - ➕ **Spieler oder Rollen hinzufügen** (während der Rollzeit).
-   - 👤 **Spieler verwalten**: Spieler per Suche auswählen, dann
+   - 👤 **Spieler verwalten**: Der Knopf öffnet ein Pop-up. Darin einen oder mehrere Spieler per Suche auswählen, dann
      - ↩️ **Entscheidung zurücksetzen**, z. B. nach einem Fehlklick (während der Rollzeit), oder
      - ➖ **Aus Verlosung entfernen**. Der Wurf fällt weg, und der Spieler kann nicht mehr würfeln. Das geht auch nach der Rollzeit, solange kein Gewinner feststeht.
    - ⏰ **Rollzeit ändern**, gerechnet ab jetzt, z. B. „endet in 6 Stunden“.

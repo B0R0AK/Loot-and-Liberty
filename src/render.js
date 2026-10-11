@@ -3,6 +3,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  LabelBuilder,
   MentionableSelectMenuBuilder,
   ModalBuilder,
   StringSelectMenuBuilder,
@@ -210,16 +211,6 @@ export function panelView(session) {
         .setMaxValues(MAX_SELECT),
     ),
   );
-  // Nutzer-Auswahl statt fester Liste: mit Suche und ohne 25er-Limit.
-  rows.push(
-    new ActionRowBuilder().addComponents(
-      new UserSelectMenuBuilder()
-        .setCustomId(`panel:member:${session.id}`)
-        .setPlaceholder('👤 Spieler verwalten – zurücksetzen oder entfernen …')
-        .setMinValues(1)
-        .setMaxValues(1),
-    ),
-  );
   if (session.rollingOpen) {
     rows.push(
       new ActionRowBuilder().addComponents(
@@ -237,6 +228,8 @@ export function panelView(session) {
     );
   }
   buttons.push(
+    // Öffnet ein Pop-up statt einer Nachricht – im vollen Leader-Kanal springt so nichts.
+    new ButtonBuilder().setCustomId(`panel:manage:${session.id}`).setLabel('Spieler verwalten').setEmoji('👤').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`panel:rename:${session.id}`).setLabel('Namen ändern').setEmoji('✏️').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`panel:close:${session.id}`).setLabel('Ohne Gewinner schließen').setStyle(ButtonStyle.Danger),
   );
@@ -372,41 +365,26 @@ export function summaryEmbed(session, imageName = null, { forLootChannel = false
   return embed;
 }
 
-/** Status eines Teilnehmers in einer Zeile, z. B. „🎲 87 · ⭐ BiS-Item“. */
-export function participantStatus(p) {
-  if (p.status === Status.ROLLED) {
-    const purpose = purposeById(p.purpose);
-    return `🎲 **${p.roll}** · ${purpose.emoji} ${purpose.label}`;
+/**
+ * Pop-up „Spieler verwalten“: einen oder mehrere Spieler wählen und entfernen bzw. zurücksetzen.
+ * Ein Pop-up statt einer Antwort im Kanal – sonst springt Discord im vollen Leader-Kanal hin und her.
+ */
+export function manageModal(session, preselected = []) {
+  const users = new UserSelectMenuBuilder().setCustomId('users').setMinValues(1).setMaxValues(MAX_SELECT).setPlaceholder('Spieler suchen …');
+  if (preselected.length) users.setDefaultUsers(preselected.slice(0, MAX_SELECT));
+  const actions = [{ label: 'Aus Verlosung entfernen', value: 'remove', emoji: '➖', description: 'Wurf fällt weg, kann nicht mehr würfeln', default: true }];
+  if (session.rollingOpen) {
+    actions.push({ label: 'Entscheidung zurücksetzen', value: 'reset', emoji: '↩️', description: 'Spieler kann neu würfeln oder passen' });
   }
-  if (p.status === Status.PASSED) return p.roll === null ? '🚫 gepasst' : `🚫 gepasst (hatte ~~${p.roll}~~)`;
-  return '⏳ noch keine Entscheidung';
-}
-
-/** Kleines Fenster (nur für den Leader sichtbar) nach Auswahl eines Spielers im Panel. */
-export function memberActionView(session, userId) {
-  const p = session.participants.get(userId);
-  if (!p) {
-    return { content: `<@${userId}> ist bei **${session.item.name}** nicht dabei. Über „➕ Spieler hinzufügen“ kannst du ihn aufnehmen.`, components: [] };
-  }
-  const canReset = session.rollingOpen && p.status !== Status.PENDING;
-  return {
-    content: `👤 <@${userId}> bei **${session.item.name}**\n${participantStatus(p)}`,
-    components: [
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`member:reset:${session.id}:${userId}`)
-          .setLabel('Entscheidung zurücksetzen')
-          .setEmoji('↩️')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(!canReset),
-        new ButtonBuilder()
-          .setCustomId(`member:remove:${session.id}:${userId}`)
-          .setLabel('Aus Verlosung entfernen')
-          .setEmoji('➖')
-          .setStyle(ButtonStyle.Danger),
-      ),
-    ],
-  };
+  return new ModalBuilder()
+    .setCustomId(`manage:${session.id}`)
+    .setTitle(`Spieler verwalten – ${session.item.name}`.slice(0, 45))
+    .addLabelComponents(
+      new LabelBuilder().setLabel('Spieler').setDescription('Einen oder mehrere auswählen').setUserSelectMenuComponent(users),
+      new LabelBuilder()
+        .setLabel('Aktion')
+        .setStringSelectMenuComponent(new StringSelectMenuBuilder().setCustomId('action').setMinValues(1).setMaxValues(1).addOptions(actions)),
+    );
 }
 
 /** Eingabefenster zum Umbenennen eines Items (scope: 'draft' oder 'panel'). */
