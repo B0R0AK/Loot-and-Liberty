@@ -1,7 +1,7 @@
 {
   "name": "loot-and-liberty",
   "version": "0.1.0",
-  "description": "Discord-Bot zur Loot-Verteilung für Throne and Liberty",
+  "description": "Discord bot for fair loot distribution in Throne and Liberty (German / English)",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
