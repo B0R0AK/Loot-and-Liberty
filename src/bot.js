@@ -1,14 +1,16 @@
 import { MessageFlags, PermissionFlagsBits } from 'discord.js';
 import { commands } from './commands.js';
 import { detectItems, fetchLinkPreview } from './item.js';
+import { t } from './i18n.js';
 import { renderItemCard } from './itemcard.js';
 import {
-  HELP_TEXT,
+  helpText,
   groupDraftView,
   groupStatusText,
   hoursLabel,
   lootPayload,
   manageModal,
+  purposeText,
   openSessionLine,
   panelView,
   pingChunks,
@@ -17,7 +19,7 @@ import {
   starterContent,
   summaryEmbed,
 } from './render.js';
-import { LootSession, purposeById } from './session.js';
+import { LootSession } from './session.js';
 
 const DRAFT_TTL_MS = 30 * 60_000;
 const GROUP_MAX_HOURS = 12;
@@ -41,6 +43,8 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
   const timers = new Map();
 
   const ephemeral = (content) => ({ content, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
+  /** Sprache des Servers (/einrichten sprache:). */
+  const langOf = (guildId) => store.guild(guildId).language;
 
   // ---------- Rechte ----------
 
@@ -110,10 +114,10 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     if (!items.length) return addMentionsToDraft(message);
 
     if (!isLeader(whoWrote(message))) {
-      return message.reply({ content: 'Nur Loot-Leader können Items verlosen. Ein Bot-Admin kann dich mit `/leader hinzufügen` freischalten.', allowedMentions: { parse: [] } });
+      return message.reply({ content: t(cfg.language, 'notLeaderPost'), allowedMentions: { parse: [] } });
     }
     if (!cfg.lootChannelId) {
-      return message.reply('Es ist noch kein Loot-Kanal eingerichtet. Ein Bot-Admin kann das mit `/einrichten lootkanal:#kanal` tun.');
+      return message.reply(t(cfg.language, 'noLootChannel'));
     }
 
     const multi = items.length > 1;
@@ -158,6 +162,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       selection: mentionsOf(message),
       managers: { users: [], roles: [] },
       rollHours: cfg.rollHours,
+      lang: cfg.language,
       imageFile: p.file,
       prompt: null,
     };
@@ -167,7 +172,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     setTimeout(async () => {
       if (drafts.get(draft.id) !== draft) return;
       drafts.delete(draft.id);
-      await draft.prompt.edit({ content: '⌛ Abgelaufen – poste das Item einfach neu.', embeds: [], components: [], attachments: [] }).catch(() => {});
+      await draft.prompt.edit({ content: t(draft.lang, 'expired'), embeds: [], components: [], attachments: [] }).catch(() => {});
     }, DRAFT_TTL_MS).unref();
   }
 
@@ -175,13 +180,13 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
   async function autoLoot(message, cfg, group, prepared, multi) {
     const members = await resolveMembers(message.guild, group.selection);
     if (!members.size) {
-      return message.reply({ content: '⚠️ In deiner Gruppe sind keine (menschlichen) Mitglieder. Starte sie mit `/gruppe start` neu.', allowedMentions: { parse: [] } });
+      return message.reply({ content: t(cfg.language, 'groupEmpty'), allowedMentions: { parse: [] } });
     }
     let started = 0;
     for (const p of prepared) {
       try {
         const panel = await message.reply({
-          content: `⏳ **${p.item.name}** wird verlost …`,
+          content: t(cfg.language, 'beingRaffled', p.item.name),
           files: panelFiles(p, multi),
           allowedMentions: { parse: [] },
         });
@@ -193,6 +198,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
           item: p.item,
           managers: group.managers,
           rollHours: group.rollHours,
+          lang: cfg.language,
           imageFile: p.file,
         };
         await startLoot({ guild: message.guild, draft, members, panelMessage: panel });
@@ -222,10 +228,10 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
   async function handleDraft(interaction, action, id) {
     const draft = drafts.get(id);
     if (!draft) {
-      return interaction.update({ content: '⌛ Abgelaufen – poste das Item einfach neu.', embeds: [], components: [] });
+      return interaction.update({ content: t(langOf(interaction.guildId), 'expired'), embeds: [], components: [] });
     }
     if (interaction.user.id !== draft.authorId && !isBotAdmin(whoInteracts(interaction))) {
-      return interaction.reply(ephemeral(`Das kann nur <@${draft.authorId}> auswählen.`));
+      return interaction.reply(ephemeral(t(draft.lang, 'onlyAuthor', draft.authorId)));
     }
 
     if (action === 'select') {
@@ -242,7 +248,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     }
 
     if (action === 'rename') {
-      return interaction.showModal(renameModal('draft', id, draft.item.name));
+      return interaction.showModal(renameModal('draft', id, draft.item.name, draft.lang));
     }
 
     if (action === 'hours') {
@@ -252,13 +258,13 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
 
     if (action === 'cancel') {
       drafts.delete(id);
-      return interaction.update({ content: `Abgebrochen: **${draft.item.name}**`, embeds: [], components: [], attachments: [] });
+      return interaction.update({ content: t(draft.lang, 'cancelled', draft.item.name), embeds: [], components: [], attachments: [] });
     }
 
     if (action === 'start') {
       await interaction.deferUpdate();
       const members = await resolveMembers(interaction.guild, draft.selection);
-      if (!members.size) return interaction.followUp(ephemeral('⚠️ In der Auswahl sind keine (menschlichen) Mitglieder.'));
+      if (!members.size) return interaction.followUp(ephemeral(t(draft.lang, 'noMembers')));
       drafts.delete(id);
       await startLoot({ guild: interaction.guild, draft, members, panelMessage: interaction.message });
     }
@@ -286,6 +292,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       panelChannelId: panelMessage.channelId,
       panelMessageId: panelMessage.id,
       sourceMessageId: draft.sourceMessageId ?? draft.id,
+      lang: draft.lang,
       endsAt: Date.now() + draft.rollHours * HOUR,
     });
 
@@ -304,7 +311,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     store.set(session);
     scheduleLock(session);
 
-    await pingPlayers(thread, [...members.keys()], `🔔 **${session.item.name}** – ihr seid dran! Wählt oben, wofür ihr rollt, oder passt. `);
+    await pingPlayers(thread, [...members.keys()], t(session.lang, 'ping', session.item.name));
     await panelMessage.edit({ ...panelView(session), allowedMentions: { parse: [] } });
   }
 
@@ -338,11 +345,10 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     await render(session, { starter: true });
     const thread = await channel(session.threadId);
     await thread.send(
-      (reason === 'timeout' ? '⏰ **Die Rollzeit ist vorbei.**' : '⏹️ **Der Leader hat das Rollen beendet.**') +
-        ' Der Leader wählt jetzt den Gewinner. 🔒 Der Thread wird geschlossen – das Ergebnis steht danach hier und an der Item-Nachricht.',
+      t(session.lang, reason === 'timeout' ? 'lockTimeout' : 'lockLeader') + t(session.lang, 'lockTail'),
     );
     await closeThread(thread);
-    await notifyManagers(session, `⏹️ **${session.item.name}**: Rollen beendet – bitte Gewinner auswählen.`);
+    await notifyManagers(session, t(session.lang, 'noticeLocked', session.item.name));
   }
 
   // ---------- Thread schließen/öffnen ----------
@@ -463,21 +469,11 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     return Promise.all(jobs);
   }
 
-  const REASON_TEXT = {
-    closed: 'Diese Verlosung ist bereits beendet.',
-    locked: 'Die Rollzeit ist vorbei.',
-    'not-eligible': 'Du wurdest für dieses Item nicht ausgewählt und kannst nicht würfeln.',
-    'bad-purpose': 'Unbekannte Auswahl.',
-    'not-rolled': 'Dieser Spieler hat nicht gewürfelt.',
-    'still-pending': 'Dieser Spieler hat noch nichts entschieden.',
-  };
-
-  function failText(res) {
-    if (res.reason !== 'already') return REASON_TEXT[res.reason] ?? 'Das geht gerade nicht.';
+  /** Fehlertext zu einem Ergebnis aus LootSession (z. B. { ok: false, reason: 'locked' }). */
+  function failText(res, lang) {
+    if (res.reason !== 'already') return t(lang, 'reason')[res.reason] ?? t(lang, 'reasonFallback');
     const p = res.participant;
-    return p.status === 'rolled'
-      ? `Du hast bereits gewürfelt: **${p.roll}** (${purposeById(p.purpose)?.label}). Du kannst noch passen.`
-      : 'Du hast bereits gepasst. Neu würfeln geht nur, wenn der Leader dich zurücksetzt.';
+    return p.status === 'rolled' ? t(lang, 'alreadyRolled', p.roll, purposeText(p.purpose, lang)) : t(lang, 'alreadyPassed');
   }
 
   // ---------- 4. Spieler: Würfeln und Passen (Thread) ----------
@@ -486,30 +482,28 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     store.save();
     await render(session);
     if (session.allDecided) {
-      await notifyManagers(session, `✅ **${session.item.name}**: Alle haben entschieden – der Gewinner kann ausgewählt werden.`);
+      await notifyManagers(session, t(session.lang, 'noticeAllDecided', session.item.name));
     }
   }
 
   async function handleLoot(interaction, action, id) {
     const session = store.get(id);
-    if (!session) return interaction.reply(ephemeral('Diese Verlosung ist nicht mehr aktiv.'));
+    if (!session) return interaction.reply(ephemeral(t(langOf(interaction.guildId), 'notActive')));
 
     if (action === 'roll') {
       const purpose = interaction.values[0];
       const res = session.roll(interaction.user.id, purpose);
-      if (!res.ok) return interaction.reply(ephemeral(failText(res)));
-      await interaction.reply(ephemeral(`🎲 Du hast **${res.value}** gewürfelt (${purposeById(purpose).label}).`));
+      if (!res.ok) return interaction.reply(ephemeral(failText(res, session.lang)));
+      await interaction.reply(ephemeral(t(session.lang, 'rolled', res.value, purposeText(purpose, session.lang))));
       return afterDecision(session);
     }
 
     if (action === 'pass') {
       const res = session.pass(interaction.user.id);
-      if (!res.ok) return interaction.reply(ephemeral(failText(res)));
+      if (!res.ok) return interaction.reply(ephemeral(failText(res, session.lang)));
       await interaction.reply(
         ephemeral(
-          res.droppedRoll !== null
-            ? `🚫 Du hast gepasst – dein Wurf **${res.droppedRoll}** zählt nicht mehr. Neu würfeln geht nur, wenn der Leader dich zurücksetzt.`
-            : '🚫 Du hast gepasst. Neu würfeln geht nur, wenn der Leader dich zurücksetzt.',
+          res.droppedRoll !== null ? t(session.lang, 'passedDropped', res.droppedRoll) : t(session.lang, 'passed'),
         ),
       );
       return afterDecision(session);
@@ -527,11 +521,11 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     if (session.winnerId) {
       const p = session.participants.get(session.winnerId);
       await thread.send({
-        content: `🏆 Glückwunsch <@${session.winnerId}>! **${session.item.name}** gehört dir (Roll **${p.roll}** · ${purposeById(p.purpose)?.emoji} ${purposeById(p.purpose)?.label}).`,
+        content: t(session.lang, 'congrats', session.winnerId, session.item.name, p.roll, purposeText(p.purpose, session.lang)),
         allowedMentions: { users: [session.winnerId] },
       });
     } else {
-      await thread.send('Verlosung ohne Gewinner geschlossen.');
+      await thread.send(t(session.lang, 'closedThread'));
     }
     await closeThread(thread);
     await postSummaryAndCleanup(session);
@@ -539,14 +533,14 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
 
   async function handlePanel(interaction, action, id) {
     const session = store.get(id);
-    if (!session) return interaction.reply(ephemeral('Diese Verlosung ist nicht mehr aktiv.'));
+    if (!session) return interaction.reply(ephemeral(t(langOf(interaction.guildId), 'notActive')));
     if (!mayManage(interaction, session)) {
-      return interaction.reply(ephemeral('Diese Verlosung verwalten nur die dafür ausgewählten Leader.'));
+      return interaction.reply(ephemeral(t(session.lang, 'onlyManagers')));
     }
 
     if (action === 'winner') {
       const res = session.chooseWinner(interaction.values[0]);
-      if (!res.ok) return interaction.reply(ephemeral(failText(res)));
+      if (!res.ok) return interaction.reply(ephemeral(failText(res, session.lang)));
       return finish(interaction, session);
     }
 
@@ -561,7 +555,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     }
 
     if (action === 'rename') {
-      return interaction.showModal(renameModal('panel', id, session.item.name));
+      return interaction.showModal(renameModal('panel', id, session.item.name, session.lang));
     }
 
     if (action === 'time') {
@@ -572,7 +566,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       scheduleLock(session);
       await render(session, { starter: true });
       const thread = await channel(session.threadId);
-      await thread.send(`⏰ **Rollzeit geändert:** endet jetzt <t:${Math.floor(session.endsAt / 1000)}:R>.`);
+      await thread.send(t(session.lang, 'timeChanged', `<t:${Math.floor(session.endsAt / 1000)}:R>`));
       return;
     }
 
@@ -584,7 +578,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     if (action === 'reset') {
       await interaction.deferUpdate();
       const res = await resetMember(session, interaction.values[0]);
-      if (!res.ok) await interaction.followUp(ephemeral(failText(res)));
+      if (!res.ok) await interaction.followUp(ephemeral(failText(res, session.lang)));
       return;
     }
 
@@ -595,10 +589,10 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
         roles: [...interaction.roles.keys()],
       });
       const added = session.addParticipants([...members.keys()], namesOf(members));
-      if (!added.length) return interaction.followUp(ephemeral('Alle Ausgewählten sind schon dabei (oder die Rollzeit ist vorbei).'));
+      if (!added.length) return interaction.followUp(ephemeral(t(session.lang, 'allAlreadyIn')));
       store.save();
       await render(session);
-      await pingPlayers(await channel(session.threadId), added, `➕ Nachträglich dabei bei **${session.item.name}**: `);
+      await pingPlayers(await channel(session.threadId), added, t(session.lang, 'pingAdded', session.item.name));
     }
   }
 
@@ -611,7 +605,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     if (redraw) await render(session);
     const thread = await channel(session.threadId);
     await thread.send({
-      content: `↩️ <@${userId}>, deine Entscheidung wurde vom Leader zurückgesetzt – du kannst neu wählen.`,
+      content: t(session.lang, 'wasReset', userId),
       allowedMentions: { users: [userId] },
     });
     return res;
@@ -624,7 +618,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     if (redraw) await render(session);
     const thread = await channel(session.threadId);
     if (!thread.archived) {
-      await thread.send({ content: `➖ <@${userId}> wurde vom Leader aus der Verlosung entfernt.`, allowedMentions: { parse: [] } });
+      await thread.send({ content: t(session.lang, 'wasRemoved', userId), allowedMentions: { parse: [] } });
     }
     return res;
   }
@@ -635,9 +629,9 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
    */
   async function handleManage(interaction, sessionId) {
     const session = store.get(sessionId);
-    if (!session) return interaction.reply(ephemeral('Diese Verlosung ist nicht mehr aktiv.'));
+    if (!session) return interaction.reply(ephemeral(t(langOf(interaction.guildId), 'notActive')));
     if (!mayManage(interaction, session)) {
-      return interaction.reply(ephemeral('Diese Verlosung verwalten nur die dafür ausgewählten Leader.'));
+      return interaction.reply(ephemeral(t(session.lang, 'onlyManagers')));
     }
     const userIds = [...interaction.fields.getSelectedUsers('users', true).keys()];
     const action = interaction.fields.getStringSelectValues('action')[0];
@@ -647,42 +641,36 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     for (const userId of userIds) {
       const opts = { redraw: false }; // Panel und Liste nur einmal am Ende neu zeichnen
       const res = action === 'reset' ? await resetMember(session, userId, opts) : await removeMember(session, userId, opts);
-      if (!res.ok) failed.push(`<@${userId}>: ${failText(res)}`);
+      if (!res.ok) failed.push(`<@${userId}>: ${failText(res, session.lang)}`);
     }
     if (failed.length < userIds.length) await render(session);
     // Nur wenn gar nichts geklappt hat, ein kurzer Hinweis (sonst sieht man das Ergebnis im Panel).
     if (failed.length === userIds.length) await interaction.followUp(ephemeral(`⚠️ ${failed.join('\n')}`));
   }
 
-  // ---------- Tagesgruppe: /gruppe start | ende | status ----------
+  // ---------- Tagesgruppe: /group start | end | status (DE: /gruppe start | ende | status) ----------
 
   async function handleGroupCommand(interaction) {
-    if (!isLeader(whoInteracts(interaction))) return interaction.reply(ephemeral('Nur Loot-Leader können Gruppen anlegen.'));
+    const L = langOf(interaction.guildId);
+    if (!isLeader(whoInteracts(interaction))) return interaction.reply(ephemeral(t(L, 'groupOnlyLeaders')));
     const sub = interaction.options.getSubcommand();
     const current = store.getGroup(interaction.guildId, interaction.user.id);
 
     if (sub === 'status') {
-      return interaction.reply(ephemeral(current ? groupStatusText(current) : 'Du hast gerade keine aktive Gruppe. Starte eine mit `/gruppe start`.'));
+      return interaction.reply(ephemeral(current ? groupStatusText({ ...current, lang: L }) : t(L, 'groupNone')));
     }
-    if (sub === 'ende') {
+    if (sub === 'end') {
       const ended = store.endGroup(interaction.guildId, interaction.user.id);
-      return interaction.reply(
-        ephemeral(
-          ended
-            ? `✅ Gruppe beendet (${ended.count ?? 0} Item(s) verlost). Ab jetzt wählst du wieder pro Item aus, wer rollen darf.`
-            : 'Du hast gerade keine aktive Gruppe.',
-        ),
-      );
+      return interaction.reply(ephemeral(ended ? t(L, 'groupEnded', ended.count ?? 0) : t(L, 'groupNoneShort')));
     }
 
     const cfg = store.guild(interaction.guildId);
-    if (!cfg.leaderChannelId || !cfg.lootChannelId) {
-      return interaction.reply(ephemeral('Erst Leader- und Loot-Kanal einrichten: `/einrichten`.'));
-    }
+    if (!cfg.leaderChannelId || !cfg.lootChannelId) return interaction.reply(ephemeral(t(L, 'groupNeedsSetup')));
     const gd = {
       id: interaction.id,
       guildId: interaction.guildId,
       leaderId: interaction.user.id,
+      lang: L,
       selection: current?.selection ?? { users: [], roles: [] },
       managers: current?.managers ?? { users: [], roles: [] },
       rollHours: current?.rollHours ?? cfg.rollHours,
@@ -694,7 +682,8 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
 
   async function handleGroupDraft(interaction, action, id) {
     const gd = groupDrafts.get(id);
-    if (!gd) return interaction.update({ content: '⌛ Abgelaufen – starte nochmal mit `/gruppe start`.', embeds: [], components: [] });
+    if (!gd) return interaction.update({ content: t(langOf(interaction.guildId), 'groupExpired'), embeds: [], components: [] });
+    const L = gd.lang;
 
     if (action === 'select') {
       gd.selection = { roles: [...interaction.roles.keys()], users: [...interaction.users.keys()] };
@@ -713,12 +702,12 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     }
     if (action === 'cancel') {
       groupDrafts.delete(id);
-      return interaction.update({ content: 'Abgebrochen – keine Gruppe gestartet.', embeds: [], components: [] });
+      return interaction.update({ content: t(L, 'groupCancelled'), embeds: [], components: [] });
     }
     if (action === 'start') {
       await interaction.deferUpdate();
       const members = await resolveMembers(interaction.guild, gd.selection);
-      if (!members.size) return interaction.followUp(ephemeral('⚠️ In der Auswahl sind keine (menschlichen) Mitglieder.'));
+      if (!members.size) return interaction.followUp(ephemeral(t(L, 'noMembers')));
       groupDrafts.delete(id);
       const now = Date.now();
       const group = store.setGroup({
@@ -732,7 +721,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
         count: 0,
       });
       return interaction.editReply({
-        content: `${groupStatusText(group)}\n-# ${members.size} Spieler aufgelöst.`,
+        content: `${groupStatusText({ ...group, lang: L })}\n${t(L, 'groupResolved', members.size)}`,
         embeds: [],
         components: [],
         allowedMentions: { parse: [] },
@@ -743,23 +732,24 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
   // ---------- Item umbenennen (Eingabefenster) ----------
 
   async function handleRename(interaction, scope, id) {
+    const L = langOf(interaction.guildId);
     const name = interaction.fields.getTextInputValue('name').replace(/\s+/g, ' ').trim().slice(0, 90);
-    if (!name) return interaction.reply(ephemeral('Der Name darf nicht leer sein.'));
+    if (!name) return interaction.reply(ephemeral(t(L, 'renameEmpty')));
 
     if (scope === 'draft') {
       const draft = drafts.get(id);
-      if (!draft) return interaction.reply(ephemeral('⌛ Abgelaufen – poste das Item einfach neu.'));
+      if (!draft) return interaction.reply(ephemeral(t(L, 'expired')));
       if (interaction.user.id !== draft.authorId && !isBotAdmin(whoInteracts(interaction))) {
-        return interaction.reply(ephemeral(`Das kann nur <@${draft.authorId}> ändern.`));
+        return interaction.reply(ephemeral(t(L, 'onlyAuthorRename', draft.authorId)));
       }
       draft.item.name = name;
       return interaction.update(promptView(draft));
     }
 
     const session = store.get(id);
-    if (!session) return interaction.reply(ephemeral('Diese Verlosung ist nicht mehr aktiv.'));
+    if (!session) return interaction.reply(ephemeral(t(L, 'notActive')));
     if (!mayManage(interaction, session)) {
-      return interaction.reply(ephemeral('Diese Verlosung verwalten nur die dafür ausgewählten Leader.'));
+      return interaction.reply(ephemeral(t(session.lang, 'onlyManagers')));
     }
     session.item.name = name;
     store.save();
@@ -769,74 +759,65 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     if (!thread.archived) await thread.setName(`🎲 ${name}`.slice(0, 100)).catch((err) => console.error('Thread umbenennen fehlgeschlagen:', err.message));
   }
 
-  // ---------- Slash-Commands: /leader, /einrichten ----------
+  // ---------- Slash-Commands: /leader, /setup (/einrichten), /loot ----------
+  // Die Befehle heißen intern englisch; deutsche Namen sind Discord-Übersetzungen (siehe commands.js).
 
   async function handleLeaderCommand(interaction) {
+    const L = langOf(interaction.guildId);
     const sub = interaction.options.getSubcommand();
     const guildId = interaction.guildId;
 
-    if (sub === 'liste') {
+    if (sub === 'list') {
       const { leaders } = store.guild(guildId);
       const list = [...leaders.roles.map((id) => `<@&${id}>`), ...leaders.users.map((id) => `<@${id}>`)];
-      return interaction.reply(
-        ephemeral(
-          `**Loot-Leader:** ${list.length ? list.join(', ') : '*noch keine*'}\n` +
-            '*Bot-Admins (Server-Besitzer und Administratoren) haben immer Leader-Rechte.*',
-        ),
-      );
+      return interaction.reply(ephemeral(`${t(L, 'leadersList', list.join(', '))}\n${t(L, 'leadersAdminsNote')}`));
     }
 
-    if (!isBotAdmin(whoInteracts(interaction))) {
-      return interaction.reply(ephemeral('Nur Bot-Admins (Server-Besitzer oder Administratoren) können Leader festlegen.'));
-    }
+    if (!isBotAdmin(whoInteracts(interaction))) return interaction.reply(ephemeral(t(L, 'leadersOnlyAdmins')));
 
-    const opt = interaction.options.get('wer', true);
+    const opt = interaction.options.get('who', true);
     const kind = opt.role ? 'roles' : 'users';
     const targetId = opt.role?.id ?? opt.user?.id;
     const label = opt.role ? `<@&${targetId}>` : `<@${targetId}>`;
-    if (opt.user?.bot) return interaction.reply(ephemeral('Bots können keine Leader sein.'));
-    if (targetId === interaction.guildId) return interaction.reply(ephemeral('@everyone kann kein Leader sein.'));
+    if (opt.user?.bot) return interaction.reply(ephemeral(t(L, 'leaderNoBots')));
+    if (targetId === interaction.guildId) return interaction.reply(ephemeral(t(L, 'leaderNoEveryone')));
 
-    const add = sub === 'hinzufügen';
+    const add = sub === 'add';
     const changed = store.setLeader(guildId, kind, targetId, add);
-    const text = add
-      ? changed ? `✅ ${label} ist jetzt Loot-Leader.` : `${label} ist bereits Loot-Leader.`
-      : changed ? `✅ ${label} ist kein Loot-Leader mehr.` : `${label} war kein Loot-Leader.`;
-    return interaction.reply(ephemeral(text));
+    const key = add ? (changed ? 'leaderAdded' : 'leaderAlready') : changed ? 'leaderRemoved' : 'leaderWasNot';
+    return interaction.reply(ephemeral(t(L, key, label)));
   }
 
   async function handleSetupCommand(interaction) {
-    if (!isBotAdmin(whoInteracts(interaction))) {
-      return interaction.reply(ephemeral('Nur Bot-Admins (Server-Besitzer oder Administratoren) können das.'));
-    }
-    const leaderChannel = interaction.options.getChannel('leaderkanal');
-    const lootChannel = interaction.options.getChannel('lootkanal');
-    const hours = interaction.options.getInteger('rollzeit');
+    if (!isBotAdmin(whoInteracts(interaction))) return interaction.reply(ephemeral(t(langOf(interaction.guildId), 'onlyAdmins')));
+    const leaderChannel = interaction.options.getChannel('leaderchannel');
+    const lootChannel = interaction.options.getChannel('lootchannel');
+    const hours = interaction.options.getInteger('rolltime');
+    const language = interaction.options.getString('language');
     const cfg =
-      leaderChannel || lootChannel || hours
+      leaderChannel || lootChannel || hours || language
         ? store.updateGuild(interaction.guildId, (c) => {
             if (leaderChannel) c.leaderChannelId = leaderChannel.id;
             if (lootChannel) c.lootChannelId = lootChannel.id;
             if (hours) c.rollHours = hours;
+            if (language) c.language = language;
           })
         : store.guild(interaction.guildId);
-    const show = (id) => (id ? `<#${id}>` : '*nicht gesetzt*');
+    const L = cfg.language;
+    const show = (id) => (id ? `<#${id}>` : t(L, 'notSet'));
     return interaction.reply(
-      ephemeral(
-        `**Leader-Kanal:** ${show(cfg.leaderChannelId)} – hier posten Leader Items\n` +
-          `**Loot-Kanal:** ${show(cfg.lootChannelId)} – hier landen Item + Thread für die Spieler\n` +
-          `**Standard-Rollzeit:** ${hoursLabel(cfg.rollHours)} – pro Item im Fenster änderbar`,
-      ),
+      ephemeral(t(L, 'setupInfo', show(cfg.leaderChannelId), show(cfg.lootChannelId), hoursLabel(cfg.rollHours, L), t(L, 'languageName'))),
     );
   }
 
   async function handleLootCommand(interaction) {
-    if (!isLeader(whoInteracts(interaction))) return interaction.reply(ephemeral('Nur Loot-Leader können das.'));
+    const L = langOf(interaction.guildId);
+    if (!isLeader(whoInteracts(interaction))) return interaction.reply(ephemeral(t(L, 'onlyLeaders')));
     const open = store.openSessions(interaction.guildId);
-    if (!open.length) return interaction.reply(ephemeral('Gerade läuft keine Verlosung.'));
+    if (!open.length) return interaction.reply(ephemeral(t(L, 'openNone')));
     const lines = open.slice(0, 20).map(openSessionLine);
-    if (open.length > 20) lines.push(`… und ${open.length - 20} weitere`);
-    return interaction.reply(ephemeral(`**Laufende Verlosungen (${open.length})**\n${lines.join('\n')}`));
+    if (open.length > 20) lines.push(t(L, 'andMore', open.length - 20));
+    return interaction.reply(ephemeral(`${t(L, 'openTitle', open.length)}\n${lines.join('\n')}`));
   }
 
   async function registerCommands(guild) {
@@ -849,10 +830,10 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
     try {
       if (interaction.isChatInputCommand()) {
         if (interaction.commandName === 'leader') return await handleLeaderCommand(interaction);
-        if (interaction.commandName === 'einrichten') return await handleSetupCommand(interaction);
+        if (interaction.commandName === 'setup') return await handleSetupCommand(interaction);
         if (interaction.commandName === 'loot') return await handleLootCommand(interaction);
-        if (interaction.commandName === 'gruppe') return await handleGroupCommand(interaction);
-        if (interaction.commandName === 'hilfe') return await interaction.reply(ephemeral(HELP_TEXT));
+        if (interaction.commandName === 'group') return await handleGroupCommand(interaction);
+        if (interaction.commandName === 'help') return await interaction.reply(ephemeral(helpText(langOf(interaction.guildId))));
         return;
       }
       if (interaction.isModalSubmit()) {
@@ -869,7 +850,7 @@ export function createLootBot({ client, store, botAdminIds = [] }) {
       if (scope === 'panel') return await handlePanel(interaction, action, id);
     } catch (err) {
       console.error('Fehler bei Interaction:', err);
-      const msg = ephemeral('❌ Da ist etwas schiefgelaufen. Hat der Bot die nötigen Rechte (Threads, Nachrichten, Dateien)?');
+      const msg = ephemeral(t(interaction.guildId ? langOf(interaction.guildId) : 'de', 'genericError'));
       if (interaction.deferred || interaction.replied) await interaction.followUp(msg).catch(() => {});
       else await interaction.reply(msg).catch(() => {});
     }

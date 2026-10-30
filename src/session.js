@@ -1,4 +1,5 @@
 import { randomInt } from 'node:crypto';
+import { STRINGS, normalizeLang } from './i18n.js';
 
 export const Status = Object.freeze({
   PENDING: 'pending',
@@ -19,6 +20,9 @@ export const PURPOSES = Object.freeze([
 ]);
 
 export const purposeById = (id) => PURPOSES.find((p) => p.id === id);
+
+/** Name eines Grunds in der Server-Sprache ("BiS-Item" / "BiS item"). */
+export const purposeLabel = (id, lang = 'de') => STRINGS[normalizeLang(lang)].purposes[id] ?? purposeById(id)?.label ?? id;
 const purposeRank = (id) => {
   const i = PURPOSES.findIndex((p) => p.id === id);
   return i === -1 ? PURPOSES.length : i;
@@ -40,6 +44,8 @@ export class LootSession {
     this.ownerId = ownerId;
     this.item = item;
     this.names = names;
+    /** Sprache der Texte dieser Verlosung (Server-Einstellung beim Start). */
+    this.lang = normalizeLang(rest.lang);
     this.rollMax = rollMax;
     this.guildId = rest.guildId ?? null;
     this.channelId = rest.channelId ?? null;

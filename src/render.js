@@ -11,7 +11,8 @@ import {
   TextInputStyle,
   UserSelectMenuBuilder,
 } from 'discord.js';
-import { PURPOSES, Status, purposeById } from './session.js';
+import { t } from './i18n.js';
+import { PURPOSES, Status, purposeById, purposeLabel } from './session.js';
 
 export const MAX_SELECT = 25;
 const COLORS = { prompt: 0x5865f2, open: 0xe8b04a, locked: 0xe67e22, won: 0x2ecc71, none: 0x80848e };
@@ -27,20 +28,23 @@ const ts = (ms, style) => `<t:${Math.floor(ms / 1000)}:${style}>`;
 
 /** Auswahl für die Rollzeit (Stunden). */
 export const ROLL_HOUR_CHOICES = [1, 2, 4, 6, 12, 24, 48, 72];
-export const hoursLabel = (h) => (h === 1 ? '1 Stunde' : `${h} Stunden`);
+export const hoursLabel = (h, lang = 'de') => t(lang, 'hours', h);
 
-function hourOptions(selected) {
+/** "⭐ BiS-Item" in der Sprache der Verlosung. */
+export const purposeText = (id, lang = 'de') => `${purposeById(id)?.emoji ?? ''} ${purposeLabel(id, lang)}`.trim();
+
+function hourOptions(selected, lang) {
   const hours = [...new Set([...ROLL_HOUR_CHOICES, selected])].filter(Boolean).sort((a, b) => a - b);
-  return hours.map((h) => ({ label: hoursLabel(h), value: String(h), emoji: '⏰', default: h === selected }));
+  return hours.map((h) => ({ label: hoursLabel(h, lang), value: String(h), emoji: '⏰', default: h === selected }));
 }
 const FIELD_LIMIT = 1024;
 
 /** Liste von Zeilen/Erwähnungen so kürzen, dass sie in ein Feld passt. */
-function fit(items, sep, limit = FIELD_LIMIT) {
+function fit(items, sep, limit = FIELD_LIMIT, lang = 'de') {
   let out = '';
   for (let i = 0; i < items.length; i++) {
     const next = out ? `${out}${sep}${items[i]}` : items[i];
-    if (next.length > limit - 30) return `${out}${sep}… und ${items.length - i} weitere`;
+    if (next.length > limit - 30) return `${out}${sep}${t(lang, 'andMore', items.length - i)}`;
     out = next;
   }
   return out || '–';
@@ -64,17 +68,14 @@ export function managerMentions(ownerId, managers) {
 }
 
 export function promptView(draft) {
+  const L = draft.lang;
   const picked = mentionList(draft.selection);
   const embed = itemEmbed(draft.item, COLORS.prompt, { image: false })
-    .setDescription(
-      '### 👥 Wer darf rollen?\n' +
-        'Wähle unten Spieler oder Rollen aus – oder schreib `@Name` / `@Rolle` hier in den Kanal.\n' +
-        `-# Danach landet das Item in <#${draft.lootChannelId}> und alle Ausgewählten werden gepingt.`,
-    )
+    .setDescription(`${t(L, 'whoMayRoll')}\n${t(L, 'promptHint')}\n${t(L, 'promptAfter', draft.lootChannelId)}`)
     .addFields(
-      { name: `🎲 Darf rollen${picked.length ? ` (${picked.length})` : ''}`, value: picked.length ? fit(picked, ' ') : '*noch niemand*' },
-      { name: '👑 Verwaltet von', value: fit(managerMentions(draft.authorId, draft.managers), ' '), inline: true },
-      { name: '⏰ Rollzeit', value: hoursLabel(draft.rollHours), inline: true },
+      { name: t(L, 'fieldMayRoll', picked.length), value: picked.length ? fit(picked, ' ', FIELD_LIMIT, L) : t(L, 'nobodyYet') },
+      { name: t(L, 'fieldManagedBy'), value: fit(managerMentions(draft.authorId, draft.managers), ' ', FIELD_LIMIT, L), inline: true },
+      { name: t(L, 'fieldRollTime'), value: hoursLabel(draft.rollHours, L), inline: true },
     );
 
   return {
@@ -84,32 +85,32 @@ export function promptView(draft) {
       new ActionRowBuilder().addComponents(
         new MentionableSelectMenuBuilder()
           .setCustomId(`draft:select:${draft.id}`)
-          .setPlaceholder('🎲 Wer darf rollen? Spieler oder Rollen …')
+          .setPlaceholder(t(L, 'phMayRoll'))
           .setMinValues(1)
           .setMaxValues(MAX_SELECT),
       ),
       new ActionRowBuilder().addComponents(
         new MentionableSelectMenuBuilder()
           .setCustomId(`draft:managers:${draft.id}`)
-          .setPlaceholder('👑 Wer verwaltet? Leader oder Leader-Rollen (optional) …')
+          .setPlaceholder(t(L, 'phManagers'))
           .setMinValues(0)
           .setMaxValues(MAX_SELECT),
       ),
       new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(`draft:hours:${draft.id}`)
-          .setPlaceholder('⏰ Rollzeit …')
-          .addOptions(hourOptions(draft.rollHours)),
+          .setPlaceholder(t(L, 'phRollTime'))
+          .addOptions(hourOptions(draft.rollHours, L)),
       ),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`draft:start:${draft.id}`)
-          .setLabel('Posten & Spieler pingen')
+          .setLabel(t(L, 'btnPost'))
           .setEmoji('📣')
           .setStyle(ButtonStyle.Success)
           .setDisabled(!picked.length),
-        new ButtonBuilder().setCustomId(`draft:rename:${draft.id}`).setLabel('Namen ändern').setEmoji('✏️').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`draft:cancel:${draft.id}`).setLabel('Abbrechen').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`draft:rename:${draft.id}`).setLabel(t(L, 'rename')).setEmoji('✏️').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`draft:cancel:${draft.id}`).setLabel(t(L, 'cancel')).setStyle(ButtonStyle.Secondary),
       ),
     ],
   };
@@ -119,19 +120,16 @@ export function promptView(draft) {
 
 /** Fenster (nur für den Leader sichtbar): wer heute rollen darf, wer verwaltet, Rollzeit. */
 export function groupDraftView(gd) {
+  const L = gd.lang;
   const picked = mentionList(gd.selection);
   const embed = new EmbedBuilder()
     .setColor(COLORS.prompt)
-    .setTitle('📋 Gruppe für heute')
-    .setDescription(
-      'Wähle, **wer heute rollen darf** – z. B. alle, die beim Gildenboss dabei waren.\n' +
-        '-# Danach wird jeder Screenshot, den du im Leader-Kanal postest, sofort mit dieser Gruppe verlost – ' +
-        'auch mehrere Bilder in einer Nachricht.',
-    )
+    .setTitle(t(L, 'groupTitle'))
+    .setDescription(`${t(L, 'groupIntro')}\n${t(L, 'groupAfter')}`)
     .addFields(
-      { name: `🎲 Darf rollen${picked.length ? ` (${picked.length})` : ''}`, value: picked.length ? fit(picked, ' ') : '*noch niemand*' },
-      { name: '👑 Verwaltet von', value: fit(managerMentions(gd.leaderId, gd.managers), ' '), inline: true },
-      { name: '⏰ Rollzeit je Item', value: hoursLabel(gd.rollHours), inline: true },
+      { name: t(L, 'fieldMayRoll', picked.length), value: picked.length ? fit(picked, ' ', FIELD_LIMIT, L) : t(L, 'nobodyYet') },
+      { name: t(L, 'fieldManagedBy'), value: fit(managerMentions(gd.leaderId, gd.managers), ' ', FIELD_LIMIT, L), inline: true },
+      { name: t(L, 'fieldRollTimeEach'), value: hoursLabel(gd.rollHours, L), inline: true },
     );
   return {
     content: '',
@@ -140,28 +138,28 @@ export function groupDraftView(gd) {
       new ActionRowBuilder().addComponents(
         new MentionableSelectMenuBuilder()
           .setCustomId(`group:select:${gd.id}`)
-          .setPlaceholder('🎲 Wer darf heute rollen? Spieler oder Rollen …')
+          .setPlaceholder(t(L, 'phMayRollToday'))
           .setMinValues(1)
           .setMaxValues(MAX_SELECT),
       ),
       new ActionRowBuilder().addComponents(
         new MentionableSelectMenuBuilder()
           .setCustomId(`group:managers:${gd.id}`)
-          .setPlaceholder('👑 Wer verwaltet? Leader oder Leader-Rollen (optional) …')
+          .setPlaceholder(t(L, 'phManagers'))
           .setMinValues(0)
           .setMaxValues(MAX_SELECT),
       ),
       new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder().setCustomId(`group:hours:${gd.id}`).setPlaceholder('⏰ Rollzeit …').addOptions(hourOptions(gd.rollHours)),
+        new StringSelectMenuBuilder().setCustomId(`group:hours:${gd.id}`).setPlaceholder(t(L, 'phRollTime')).addOptions(hourOptions(gd.rollHours, L)),
       ),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`group:start:${gd.id}`)
-          .setLabel('Gruppe starten')
+          .setLabel(t(L, 'btnStartGroup'))
           .setEmoji('✅')
           .setStyle(ButtonStyle.Success)
           .setDisabled(!picked.length),
-        new ButtonBuilder().setCustomId(`group:cancel:${gd.id}`).setLabel('Abbrechen').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`group:cancel:${gd.id}`).setLabel(t(L, 'cancel')).setStyle(ButtonStyle.Secondary),
       ),
     ],
   };
@@ -169,19 +167,21 @@ export function groupDraftView(gd) {
 
 /** Kurzinfo zu einer aktiven Gruppe. */
 export function groupStatusText(group) {
+  const L = group.lang;
   const picked = mentionList(group.selection);
   return [
-    `📋 **Gruppe aktiv** – gilt bis ${ts(group.expiresAt, 't')} (${ts(group.expiresAt, 'R')}) oder \`/gruppe ende\``,
-    `🎲 **Darf rollen:** ${fit(picked, ' ', 1500)}`,
-    `👑 **Verwaltet von:** ${managerMentions(group.leaderId, group.managers).join(' ')} · ⏰ **Rollzeit:** ${hoursLabel(group.rollHours)}`,
-    `🗂️ **Bisher verlost:** ${group.count ?? 0} Item(s)`,
-    '-# Poste jetzt Screenshots oder Questlog-Links im Leader-Kanal – jeder wird sofort verlost.',
+    t(L, 'groupActive', ts(group.expiresAt, 't'), ts(group.expiresAt, 'R')),
+    `${t(L, 'groupMayRoll')} ${fit(picked, ' ', 1500, L)}`,
+    `${t(L, 'groupManagedBy')} ${managerMentions(group.leaderId, group.managers).join(' ')} · ${t(L, 'groupRollTime')} ${hoursLabel(group.rollHours, L)}`,
+    t(L, 'groupCount', group.count ?? 0),
+    t(L, 'groupPostNow'),
   ].join('\n');
 }
 
 // ---------- Leader-Kanal: Verwaltungs-Panel ----------
 
 export function panelView(session) {
+  const L = session.lang;
   const embed = lootEmbed(session, { panel: true });
   if (session.closed) return { content: '', embeds: [embed], components: [] };
 
@@ -192,12 +192,14 @@ export function panelView(session) {
       new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(`panel:winner:${session.id}`)
-          .setPlaceholder('👑 Gewinner auswählen …')
+          .setPlaceholder(t(L, 'phWinner'))
           .addOptions(
-            rolls.map((r) => {
-              const p = purposeById(r.purpose);
-              return { label: `${session.nameOf(r.userId)} – ${r.roll}`.slice(0, 100), description: p.label, emoji: p.emoji, value: r.userId };
-            }),
+            rolls.map((r) => ({
+              label: `${session.nameOf(r.userId)} – ${r.roll}`.slice(0, 100),
+              description: purposeLabel(r.purpose, L),
+              emoji: purposeById(r.purpose).emoji,
+              value: r.userId,
+            })),
           ),
       ),
     );
@@ -206,7 +208,7 @@ export function panelView(session) {
     new ActionRowBuilder().addComponents(
       new MentionableSelectMenuBuilder()
         .setCustomId(`panel:add:${session.id}`)
-        .setPlaceholder('➕ Spieler oder Rollen hinzufügen …')
+        .setPlaceholder(t(L, 'phAdd'))
         .setMinValues(1)
         .setMaxValues(MAX_SELECT),
     ),
@@ -216,22 +218,24 @@ export function panelView(session) {
       new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(`panel:time:${session.id}`)
-          .setPlaceholder('⏰ Rollzeit ändern …')
-          .addOptions(ROLL_HOUR_CHOICES.map((h) => ({ label: `Endet in ${hoursLabel(h)}`, description: 'ab jetzt gerechnet', value: String(h), emoji: '⏰' }))),
+          .setPlaceholder(t(L, 'phChangeTime'))
+          .addOptions(
+            ROLL_HOUR_CHOICES.map((h) => ({ label: t(L, 'endsIn', hoursLabel(h, L)), description: t(L, 'fromNow'), value: String(h), emoji: '⏰' })),
+          ),
       ),
     );
   }
   const buttons = [];
   if (session.rollingOpen) {
     buttons.push(
-      new ButtonBuilder().setCustomId(`panel:lock:${session.id}`).setLabel('Rollen jetzt beenden').setEmoji('⏹️').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`panel:lock:${session.id}`).setLabel(t(L, 'btnLock')).setEmoji('⏹️').setStyle(ButtonStyle.Primary),
     );
   }
   buttons.push(
     // Öffnet ein Pop-up statt einer Nachricht – im vollen Leader-Kanal springt so nichts.
-    new ButtonBuilder().setCustomId(`panel:manage:${session.id}`).setLabel('Spieler verwalten').setEmoji('👤').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`panel:rename:${session.id}`).setLabel('Namen ändern').setEmoji('✏️').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`panel:close:${session.id}`).setLabel('Ohne Gewinner schließen').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`panel:manage:${session.id}`).setLabel(t(L, 'btnManage')).setEmoji('👤').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`panel:rename:${session.id}`).setLabel(t(L, 'rename')).setEmoji('✏️').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`panel:close:${session.id}`).setLabel(t(L, 'btnCloseNoWinner')).setStyle(ButtonStyle.Danger),
   );
   rows.push(new ActionRowBuilder().addComponents(buttons));
   return { content: '', embeds: [embed], components: rows };
@@ -247,8 +251,7 @@ function rollLines(session) {
     const first = r.purpose !== current;
     if (first) {
       current = r.purpose;
-      const p = purposeById(current);
-      lines.push(`**${p.emoji} ${p.label}**`);
+      lines.push(`**${purposeText(current, session.lang)}**`);
     }
     const num = `\`${String(r.roll).padStart(3, ' ')}\``;
     const crown = r.userId === session.winnerId ? ' 🏆' : '';
@@ -262,6 +265,7 @@ function rollLines(session) {
  * Ohne Bild: Das Item steht jeweils direkt darüber.
  */
 export function lootEmbed(session, { panel = false } = {}) {
+  const L = session.lang;
   const c = session.counts();
   const decided = c.total - c.pending;
   const color = session.winnerId ? COLORS.won : session.closed ? COLORS.none : session.rollsLocked ? COLORS.locked : COLORS.open;
@@ -270,19 +274,18 @@ export function lootEmbed(session, { panel = false } = {}) {
   if (panel) head.push(`🧵 <#${session.threadId}> · 👑 ${managerMentions(session.ownerId, session.managers).join(' ')}`);
   if (session.winnerId) {
     const w = session.participants.get(session.winnerId);
-    const p = purposeById(w.purpose);
-    head.push(`### 🏆 <@${session.winnerId}> gewinnt`, `mit **${w.roll}** · ${p.emoji} ${p.label}`);
+    head.push(t(L, 'wins', session.winnerId), t(L, 'withRoll', w.roll, purposeText(w.purpose, L)));
   } else if (session.closed) {
-    head.push('### ✖️ Ohne Gewinner geschlossen');
+    head.push(t(L, 'closedNoWinner'));
   } else if (session.rollsLocked) {
-    head.push('### ⏹️ Rollzeit vorbei', 'Der Leader wählt jetzt den Gewinner.');
+    head.push(t(L, 'rollTimeOverHead'), t(L, 'leaderPicksNow'));
   } else {
-    if (session.endsAt) head.push(`⏰ Rollzeit endet **${ts(session.endsAt, 'R')}**`);
-    head.push(`\`${progressBar(decided, c.total)}\` **${decided}**/${c.total} entschieden`);
+    if (session.endsAt) head.push(t(L, 'rollTimeEnds', ts(session.endsAt, 'R')));
+    head.push(`\`${progressBar(decided, c.total)}\` ${t(L, 'decided', decided, c.total)}`);
   }
 
   const lines = rollLines(session);
-  const body = lines.length ? fit(lines, '\n', 3600) : '*Noch keine Würfe – wähle unten, wofür du rollst.*';
+  const body = lines.length ? fit(lines, '\n', 3600, L) : t(L, 'noRollsYet');
   const embed = itemEmbed(session.item, color, { image: false }).setDescription(`${head.join('\n')}\n\n${body}`);
 
   // Wer nach dem Würfeln gepasst hat, behält seinen (verworfenen) Wurf durchgestrichen.
@@ -291,15 +294,17 @@ export function lootEmbed(session, { panel = false } = {}) {
     return roll === null ? `<@${id}>` : `<@${id}> ~~${roll}~~`;
   });
   const pending = session.withStatus(Status.PENDING).map((id) => `<@${id}>`);
-  if (passed.length) embed.addFields({ name: `🚫 Gepasst · ${passed.length}`, value: fit(passed, ' '), inline: true });
-  if (pending.length && session.rollingOpen) embed.addFields({ name: `⏳ Noch offen · ${pending.length}`, value: fit(pending, ' '), inline: true });
+  if (passed.length) embed.addFields({ name: t(L, 'fieldPassed', passed.length), value: fit(passed, ' ', FIELD_LIMIT, L), inline: true });
+  if (pending.length && session.rollingOpen) {
+    embed.addFields({ name: t(L, 'fieldPending', pending.length), value: fit(pending, ' ', FIELD_LIMIT, L), inline: true });
+  }
 
   if (session.closed) {
-    embed.setFooter({ text: 'Verlosung abgeschlossen' });
+    embed.setFooter({ text: t(L, 'footerDone') });
   } else if (session.rollsLocked) {
-    embed.setFooter({ text: `${c.rolled} gewürfelt · ${c.passed} gepasst${c.pending ? ` · ${c.pending} ohne Entscheidung` : ''}` });
+    embed.setFooter({ text: t(L, 'footerLocked', c.rolled, c.passed, c.pending) });
   } else {
-    embed.setFooter({ text: panel ? 'Rollzeit endet' : `🎲 1–${session.rollMax} · nur ausgewählte Spieler · Rollzeit endet` });
+    embed.setFooter({ text: panel ? t(L, 'footerPanel') : t(L, 'footerThread', session.rollMax) });
     if (session.endsAt) embed.setTimestamp(session.endsAt);
   }
   return embed;
@@ -312,29 +317,29 @@ export function lootComponents(session) {
     new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`loot:roll:${session.id}`)
-        .setPlaceholder('🎲 Würfeln für …')
-        .addOptions(PURPOSES.map((p) => ({ label: p.label, value: p.id, emoji: p.emoji }))),
+        .setPlaceholder(t(session.lang, 'phRollFor'))
+        .addOptions(PURPOSES.map((p) => ({ label: purposeLabel(p.id, session.lang), value: p.id, emoji: p.emoji }))),
     ),
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`loot:pass:${session.id}`).setLabel('Passen').setEmoji('🚫').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`loot:pass:${session.id}`).setLabel(t(session.lang, 'btnPass')).setEmoji('🚫').setStyle(ButtonStyle.Secondary),
     ),
   ];
 }
 
 /** Text der Item-Nachricht im Loot-Kanal (das Bild hängt als Datei daran). */
 export function starterContent(session) {
+  const L = session.lang;
   const { item } = session;
   const c = session.counts();
   const link = item.url ? ` · [Questlog](<${item.url}>)` : '';
   let status;
   if (session.winnerId) {
     const w = session.participants.get(session.winnerId);
-    const p = purposeById(w.purpose);
-    status = `🏆 **Vergeben an <@${session.winnerId}>** · ${w.roll} · ${p.emoji} ${p.label}`;
-  } else if (session.closed) status = '✖️ **Ohne Gewinner geschlossen**';
-  else if (session.rollsLocked) status = '⏹️ **Rollzeit vorbei** · der Leader wählt den Gewinner';
-  else status = `🎲 **Verlosung läuft** · endet ${ts(session.endsAt, 'f')} (${ts(session.endsAt, 'R')})`;
-  return `## ${ITEM_ICON} ${item.name}\n${status}\n-# 👥 ${c.total} Spieler${link} · Würfeln & Passen im Thread ↓`;
+    status = t(L, 'starterWon', session.winnerId, w.roll, purposeText(w.purpose, L));
+  } else if (session.closed) status = t(L, 'starterClosed');
+  else if (session.rollsLocked) status = t(L, 'starterLocked');
+  else status = t(L, 'starterRunning', ts(session.endsAt, 'f'), ts(session.endsAt, 'R'));
+  return `## ${ITEM_ICON} ${item.name}\n${status}\n${t(L, 'starterInfo', c.total, link)}`;
 }
 
 /**
@@ -348,19 +353,19 @@ export function summaryEmbed(session, imageName = null, { forLootChannel = false
   if (session.item.url) embed.setURL(session.item.url);
   if (imageName) embed.setThumbnail(`attachment://${imageName}`);
 
+  const L = session.lang;
   let result;
   if (session.winnerId) {
     const w = session.participants.get(session.winnerId);
-    const p = purposeById(w.purpose);
-    result = `🏆 **Gewinner:** <@${session.winnerId}>\n🎲 **${w.roll}** · ${p.emoji} ${p.label}`;
+    result = t(L, 'summaryWinner', session.winnerId, w.roll, purposeText(w.purpose, L));
   } else if (session.closed) {
-    result = '✖️ **Ohne Gewinner geschlossen**';
+    result = t(L, 'starterClosed');
   } else {
-    result = '⏹️ **Rollzeit vorbei**\nDer Gewinner wird gerade gewählt.';
+    result = t(L, 'summaryLocked');
   }
   // Im Loot-Kanal hängt der Thread direkt darunter – dort reicht die Statistik.
   const extra = forLootChannel ? '' : ` · 🧵 <#${session.threadId}> · 👑 <@${session.ownerId}>`;
-  embed.setDescription(`${result}\n-# ${c.rolled} gewürfelt · ${c.passed} gepasst${extra}`);
+  embed.setDescription(`${result}\n-# ${t(L, 'summaryStats', c.rolled, c.passed)}${extra}`);
   if (session.closed) embed.setTimestamp();
   return embed;
 }
@@ -370,33 +375,34 @@ export function summaryEmbed(session, imageName = null, { forLootChannel = false
  * Ein Pop-up statt einer Antwort im Kanal – sonst springt Discord im vollen Leader-Kanal hin und her.
  */
 export function manageModal(session, preselected = []) {
-  const users = new UserSelectMenuBuilder().setCustomId('users').setMinValues(1).setMaxValues(MAX_SELECT).setPlaceholder('Spieler suchen …');
+  const L = session.lang;
+  const users = new UserSelectMenuBuilder().setCustomId('users').setMinValues(1).setMaxValues(MAX_SELECT).setPlaceholder(t(L, 'manageSearch'));
   if (preselected.length) users.setDefaultUsers(preselected.slice(0, MAX_SELECT));
-  const actions = [{ label: 'Aus Verlosung entfernen', value: 'remove', emoji: '➖', description: 'Wurf fällt weg, kann nicht mehr würfeln', default: true }];
+  const actions = [{ label: t(L, 'actRemove'), value: 'remove', emoji: '➖', description: t(L, 'actRemoveHint'), default: true }];
   if (session.rollingOpen) {
-    actions.push({ label: 'Entscheidung zurücksetzen', value: 'reset', emoji: '↩️', description: 'Spieler kann neu würfeln oder passen' });
+    actions.push({ label: t(L, 'actReset'), value: 'reset', emoji: '↩️', description: t(L, 'actResetHint') });
   }
   return new ModalBuilder()
     .setCustomId(`manage:${session.id}`)
-    .setTitle(`Spieler verwalten – ${session.item.name}`.slice(0, 45))
+    .setTitle(t(L, 'manageTitle', session.item.name).slice(0, 45))
     .addLabelComponents(
-      new LabelBuilder().setLabel('Spieler').setDescription('Einen oder mehrere auswählen').setUserSelectMenuComponent(users),
+      new LabelBuilder().setLabel(t(L, 'managePlayers')).setDescription(t(L, 'managePlayersHint')).setUserSelectMenuComponent(users),
       new LabelBuilder()
-        .setLabel('Aktion')
+        .setLabel(t(L, 'manageAction'))
         .setStringSelectMenuComponent(new StringSelectMenuBuilder().setCustomId('action').setMinValues(1).setMaxValues(1).addOptions(actions)),
     );
 }
 
 /** Eingabefenster zum Umbenennen eines Items (scope: 'draft' oder 'panel'). */
-export function renameModal(scope, id, currentName) {
+export function renameModal(scope, id, currentName, lang = 'de') {
   return new ModalBuilder()
     .setCustomId(`rename:${scope}:${id}`)
-    .setTitle('Item-Namen ändern')
+    .setTitle(t(lang, 'renameTitle'))
     .addComponents(
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId('name')
-          .setLabel('Name des Items')
+          .setLabel(t(lang, 'renameLabel'))
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
           .setMaxLength(90)
@@ -408,28 +414,13 @@ export function renameModal(scope, id, currentName) {
 /** Eine Zeile für /loot offen. */
 export function openSessionLine(session) {
   const c = session.counts();
-  const state = session.rollsLocked ? '⏹️ Gewinner offen' : `⏰ endet ${ts(session.endsAt, 'R')}`;
+  const state = session.rollsLocked ? t(session.lang, 'openWinnerPending') : t(session.lang, 'openEnds', ts(session.endsAt, 'R'));
   const panel = `https://discord.com/channels/${session.guildId}/${session.panelChannelId}/${session.panelMessageId}`;
   return `${ITEM_ICON} **${session.item.name}** · ${state} · 🎲 ${c.total - c.pending}/${c.total} · <#${session.threadId}> · [Panel](${panel})`;
 }
 
-export const HELP_TEXT = [
-  '## 🎁 Loot and Liberty',
-  '**So läuft eine Verlosung**',
-  '1. Leader posten einen Screenshot oder Questlog-Link im **Leader-Kanal**.',
-  '2. Im Fenster darunter wählen sie, **wer rollen darf**, **wer verwaltet** und die **Rollzeit**.',
-  '3. Der Bot postet das Item im **Loot-Kanal** mit Thread und pingt die Spieler an.',
-  `4. Spieler wählen im Thread, wofür sie würfeln (${PURPOSES.map((p) => `${p.emoji} ${p.label}`).join(' · ')}), oder passen – auch noch nach dem Würfeln. Neu würfeln geht nur, wenn der Leader sie zurücksetzt.`,
-  '5. Die Verwalter wählen im **Leader-Panel** den Gewinner. Dort können sie auch Spieler hinzufügen, zurücksetzen oder entfernen und die Rollzeit ändern.',
-  '',
-  '**Befehle**',
-  '`/gruppe start` · `/gruppe ende` · `/gruppe status` – Teilnehmer für den Tag festlegen, dann jeden Screenshot sofort verlosen (Leader)',
-  '`/loot offen` – laufende Verlosungen (Leader)',
-  '`/leader liste` – alle Loot-Leader',
-  '`/leader hinzufügen` · `/leader entfernen` – Leader festlegen (Bot-Admins)',
-  '`/einrichten` – Kanäle und Standard-Rollzeit (Bot-Admins)',
-  '`/hilfe` – diese Übersicht',
-].join('\n');
+/** Text für /hilfe bzw. /help. */
+export const helpText = (lang = 'de') => t(lang, 'help', PURPOSES.map((p) => purposeText(p.id, lang)).join(' · '));
 
 export function lootPayload(session) {
   return { embeds: [lootEmbed(session)], components: lootComponents(session) };
