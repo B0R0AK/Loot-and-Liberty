@@ -1,8 +1,9 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { normalizeLang } from './i18n.js';
 import { LootSession } from './session.js';
 
-const emptyGuild = () => ({ leaderChannelId: null, lootChannelId: null, rollHours: null, leaders: { users: [], roles: [] } });
+const emptyGuild = () => ({ leaderChannelId: null, lootChannelId: null, rollHours: null, language: null, leaders: { users: [], roles: [] } });
 
 /**
  * Speichert offene Verlosungen und die Server-Einstellungen (Kanäle, Leader)
@@ -58,6 +59,7 @@ export class SessionStore {
       leaderChannelId: cfg.leaderChannelId ?? this.defaults.leaderChannelId ?? null,
       lootChannelId: cfg.lootChannelId ?? this.defaults.lootChannelId ?? null,
       rollHours: cfg.rollHours ?? this.defaults.rollHours ?? 24,
+      language: normalizeLang(cfg.language ?? this.defaults.language),
     };
   }
 

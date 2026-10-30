@@ -1,128 +1,191 @@
 # Loot and Liberty
 
-Discord-Bot, der das Verteilen von Loot in **Throne and Liberty** einfacher macht.
+**A Discord bot for fair, transparent loot distribution in _Throne and Liberty_.**
 
-## Ablauf
+Leaders post a screenshot or a [Questlog](https://questlog.gg/throne-and-liberty) link, pick who may roll – and the bot handles the rest:
+an item post with a thread, pings, rolls 1–100 with a reason (BiS, Potential, PvP …), a live roll list, a roll timer, winner selection and clean-up.
 
-Es gibt zwei Kanäle:
-- einen **Leader-Kanal** (z. B. `#loot-leitung`), den nur Leader sehen,
-- einen **Loot-Kanal** (z. B. `#loot`) für alle.
+🇩🇪 **[Deutsche Version → README.de.md](README.de.md)** · The bot speaks **English and German** (per server).
 
-1. **Leader postet das Item** im Leader-Kanal: einen **Screenshot** oder einen **Questlog-Link**, optional mit Text als Item-Name.
-   Bei einem Questlog-Link ohne Screenshot zeichnet der Bot selbst eine **Item-Karte** mit Symbol, Seltenheit und Stats. Die Daten kommen von Questlog, in der Sprache des Links.
-2. **„Wer darf rollen?“** erscheint direkt darunter. Der Leader wählt Spieler oder Rollen aus der **Liste**
-   oder schreibt sie als `@Name` / `@Rolle` in den Leader-Kanal. `@Erwähnungen` im Item-Post werden direkt übernommen.
-   Im zweiten Feld legt er fest, **wer die Verlosung verwaltet**: einzelne Leader, eine oder mehrere Leader-Rollen oder beides.
-   Er selbst verwaltet immer mit. Im dritten Feld wählt er die **Rollzeit** (1–72 Stunden, Vorgabe per `/einrichten`).
-   Stimmt der erkannte Item-Name nicht, korrigiert er ihn mit **✏️ Namen ändern**. Das geht auch später noch im Panel.
-   Dann klickt er auf **📣 Posten & Spieler pingen**.
-3. **Der Bot postet das Item mit Bild im Loot-Kanal** und öffnet daran einen **Thread** mit der Roll-Liste.
-   Alle Ausgewählten werden im Thread angepingt. Bei einer Rolle wird jedes Mitglied einzeln angepingt.
-4. **Die Spieler haben die gewählte Rollzeit**, Standard 24 Stunden. In der Zeit wählen sie, **wofür** sie rollen, und würfeln 1–100:
-   ⭐ BiS-Item · ✨ Potential · 💧 Watermark Upgrade · 🧬 Vererbung · ⚔️ PvP · 🔄 Offspec · 📜 Lithografie · 💰 Verkauf.
-   Das ist die Prio-Reihenfolge: In dieser Reihenfolge werden die Würfe in der Roll-Liste gruppiert (`PURPOSES` in `src/session.js`).
-   Oder sie klicken **🚫 Passen**, auch noch nachdem sie gewürfelt haben. Ihr Wurf zählt dann nicht mehr und steht durchgestrichen bei „Gepasst“.
-   Erneut würfeln geht nur, wenn ein Verwalter die Entscheidung zurücksetzt. Nur ausgewählte Spieler können würfeln.
-5. **Roll-Liste:** Die Würfe sind nach Grund gruppiert (BiS zuerst) und darin nach Höhe sortiert.
-   Die Liste steht im Thread und im Leader-Panel.
-6. **Ende der Rollzeit:** nach 24 Stunden oder früher per **⏹️ Rollen jetzt beenden**.
-   Der Bot **sperrt und archiviert den Thread**, damit die Kanalliste aufgeräumt bleibt, und pingt die Verwalter im Leader-Kanal an.
-   Die Item-Nachricht im Loot-Kanal **schrumpft auf eine kleine Karte** mit Vorschaubild. Nach der Vergabe steht dort der Gewinner.
-   Für die Gewinner-Nachricht öffnet er den Thread kurz und schließt ihn danach wieder.
-7. **Leader-Panel** im Leader-Kanal, nur für die Verwalter dieser Verlosung:
-   - 👑 **Gewinner auswählen**: Der Bot verkündet ihn im Thread und vermerkt ihn an der Item-Nachricht.
-   - ➕ **Spieler oder Rollen hinzufügen** (während der Rollzeit).
-   - 👤 **Spieler verwalten**: Spieler per Suche auswählen, dann
-     - ↩️ **Entscheidung zurücksetzen**, z. B. nach einem Fehlklick (während der Rollzeit), oder
-     - ➖ **Aus Verlosung entfernen**. Der Wurf fällt weg, und der Spieler kann nicht mehr würfeln. Das geht auch nach der Rollzeit, solange kein Gewinner feststeht.
-   - ⏰ **Rollzeit ändern**, gerechnet ab jetzt, z. B. „endet in 6 Stunden“.
-   - ⏹️ **Rollen jetzt beenden** und **Ohne Gewinner schließen**.
-8. **Aufräumen:** Nach der Vergabe, oder wenn ohne Gewinner geschlossen wird, löscht der Bot im Leader-Kanal den Item-Post, das Panel und die Hinweise.
-   Stattdessen postet er eine **kompakte Ergebnis-Karte** mit kleinem Item-Bild, Gewinner, Wurf, Grund und Link zum Thread.
+![Item card generated from a Questlog link](docs/images/en/item-card.png)
 
-### Mehrere Items auf einmal (z. B. Gildenboss)
+## Features
 
-1. Der Leader legt **einmal** fest, wer heute dabei war: `/gruppe start`. Im Fenster wählt er Spieler oder Rollen, Verwalter und Rollzeit.
-2. Danach postet er die Screenshots im Leader-Kanal, **einzeln oder alle in einer Nachricht**.
-   Jedes Bild wird **sofort** zu einer eigenen Verlosung mit Item-Post, Thread, Pings und Panel, ohne Rückfrage.
-   Bei mehreren Bildern ohne Text heißen die Items „Loot 1/5“, „Loot 2/5“ … Mit Text, z. B. „Gildenboss“, heißen sie „Gildenboss 1/5“ … Umbenennen geht im Panel.
-3. Die Gruppe gilt bis `/gruppe ende`, höchstens aber 12 Stunden. `/gruppe status` zeigt sie an.
-   Ohne aktive Gruppe gibt es wie gewohnt pro Item das Fenster „Wer darf rollen?“, auch bei mehreren Bildern in einer Nachricht.
+- **Screenshot or Questlog link:** For a Questlog link without a screenshot, the bot draws its own item card with icon, rarity, item level and stats (see above).
+- **Who may roll:** pick players and/or roles – or type `@name` / `@role`. Only selected players can roll.
+- **Roll reasons in priority order:** ⭐ BiS item · ✨ Potential · 💧 Watermark upgrade · 🧬 Inheritance · ⚔️ PvP · 🔄 Offspec · 📜 Lithograph · 💰 Sell
+- **Pass** – even after rolling (the roll then no longer counts).
+- **Roll timer** (default 24 h, adjustable per server, per item and while running); the thread is locked and archived afterwards.
+- **Leader panel:** choose the winner, add/remove/reset players, change the roll time, rename the item.
+- **Managers per loot roll:** individual leaders and/or leader roles.
+- **Guild bosses:** with `/group start` set the participants once – every screenshot is then raffled right away, even 5 images in one message.
+- **Tidy channels:** after the roll, big posts shrink to compact result cards.
+- **Survives restarts:** loot rolls, timers, leaders and settings are stored in a JSON file.
 
-Jeder Leader hat seine eigene Gruppe. Der Leader-Post mit mehreren Bildern wird erst gelöscht, wenn alle Items daraus abgeschlossen sind.
+## How it works
 
-## Rechte
+There are two channels: a **leader channel** (only leaders can see it) and a **loot channel** (everyone).
 
-| Wer | Darf |
+### 1. Leader posts the item
+
+A screenshot or Questlog link in the leader channel. Right below, the window **“Who may roll?”** appears: players/roles, managers and roll time.
+
+![Leader posts an item](docs/images/en/1-leader-post.png)
+
+### 2. Item + thread in the loot channel
+
+The bot posts the item with its image and opens a thread. Everyone selected gets pinged.
+
+![Item post in the loot channel](docs/images/en/2-loot-channel.png)
+
+### 3. Players roll or pass
+
+In the thread, each selected player chooses what they roll for (1–100) – or passes. The roll list is grouped by priority.
+
+![Thread with roll list](docs/images/en/3-thread.png)
+
+### 4. Leaders manage the loot roll
+
+The leader panel shows the same list. Here the managers choose the winner, add players, change the roll time …
+
+![Leader panel](docs/images/en/4-leader-panel.png)
+
+… and remove or reset players via a pop-up – several at once.
+
+![Manage players pop-up](docs/images/en/5-manage-players.png)
+
+### 5. Result
+
+The winner is announced in the thread. In the leader channel the item post, panel and notices are replaced by a compact result card.
+
+![Result cards](docs/images/en/6-results.png)
+
+### Several items at once (guild boss)
+
+`/group start` – choose who was there today. After that, every screenshot of that leader is raffled to this group immediately (also several images in one message). Valid until `/group end`, at most 12 hours.
+
+![Group for today](docs/images/en/7-group.png)
+
+## Commands
+
+Discord shows the commands in each user's Discord language (e.g. `/setup` ↔ `/einrichten`).
+
+| Command | Who | What |
+| --- | --- | --- |
+| `/setup leaderchannel: lootchannel: rolltime: language:` | Bot admins | Channels, default roll time (hours) and language (`de`/`en`). Without options: show current settings |
+| `/leader add who:` · `/leader remove who:` | Bot admins | Make a player or role a loot leader / revoke it |
+| `/leader list` | Everyone | Show all loot leaders |
+| `/group start` · `/group end` · `/group status` | Leaders | Participants for the day; then every screenshot is raffled immediately |
+| `/loot open` | Leaders | Running loot rolls with links to thread and panel |
+| `/help` | Everyone | Short overview |
+
+### Permissions
+
+| Who | May |
 | --- | --- |
-| **Bot-Admins**: Server-Besitzer, Administratoren und `BOT_ADMIN_IDS` | Leader festlegen (`/leader`), Kanäle einrichten (`/einrichten`), alles, was Leader und Verwalter dürfen |
-| **Loot-Leader**: per `/leader hinzufügen` festgelegte Spieler oder Rollen | Items posten, auswählen, wer rollt und wer verwaltet |
-| **Verwalter einer Verlosung**: der Ersteller plus die beim Posten gewählten Leader oder Leader-Rollen | Das Panel dieser Verlosung bedienen |
-| **Ausgewählte Spieler** | Würfeln oder passen |
+| **Bot admins** – server owner, administrators, `BOT_ADMIN_IDS` | Set leaders, `/setup`, everything leaders and managers may do |
+| **Loot leaders** – set via `/leader add` (players or roles) | Post items, choose who rolls and who manages |
+| **Managers of a loot roll** – the poster plus the leaders/roles chosen when posting | Use the panel of that loot roll |
+| **Selected players** | Roll or pass |
 
-### Befehle
+## Setup
 
-- `/leader hinzufügen wer:@Name` oder `wer:@Rolle`: macht einen Spieler oder eine Rolle zum Loot-Leader.
-- `/leader entfernen wer:@Name`: entzieht die Leader-Rechte.
-- `/leader liste`: zeigt alle Loot-Leader.
-- `/einrichten leaderkanal:#loot-leitung lootkanal:#loot rollzeit:24`: legt die Kanäle und die Standard-Rollzeit in Stunden fest. Jede Angabe ist optional. Ohne Angaben zeigt der Befehl die aktuelle Einstellung.
-- `/gruppe start` · `/gruppe ende` · `/gruppe status`: Teilnehmer für den Tag festlegen. Danach wird jeder Screenshot sofort verlost (Leader).
-- `/loot offen`: zeigt allen Leadern die laufenden Verlosungen mit Link zu Thread und Panel.
-- `/hilfe`: gibt eine kurze Übersicht über Ablauf und Befehle.
+Requirements: **Node.js 22.9+** and a machine that is always on (e.g. a small VPS).
 
-Die Befehle registriert der Bot beim Start automatisch auf jedem Server.
+### 1. Create the bot in Discord
 
-## Einrichtung
-
-Voraussetzung: Node.js 22 oder neuer.
-
-1. Im [Discord Developer Portal](https://discord.com/developers/applications) eine Application **„Loot and Liberty“** mit Bot anlegen.
-2. Unter **Bot → Privileged Gateway Intents** aktivieren:
-   - **Server Members Intent**: um alle Mitglieder einer Rolle zu finden.
-   - **Message Content Intent**: um Screenshots, Links und @Erwähnungen im Leader-Kanal zu lesen.
-3. Den Bot mit den Scopes `bot` und `applications.commands` einladen. Dieser Link enthält alle nötigen Rechte (`DEINE_APP_ID` ersetzen):
-   `https://discord.com/oauth2/authorize?client_id=DEINE_APP_ID&scope=bot+applications.commands&permissions=326417640512`
-4. Zwei Kanäle anlegen: `#loot-leitung` (nur Leader) und `#loot` (alle). Der Bot braucht diese Rechte:
-   - **`#loot-leitung`**: Kanal ansehen, Nachrichten senden, Links einbetten, Dateien anhängen, Nachrichtenverlauf lesen, Reaktionen hinzufügen, **Nachrichten verwalten** (zum Aufräumen nach der Vergabe).
-   - **`#loot`**: Kanal ansehen, Nachrichten senden, Dateien anhängen, Links einbetten, Öffentliche Threads erstellen, Nachrichten in Threads senden, **Threads verwalten** (zum Schließen der Threads).
-5. Starten:
-   ```bash
-   cp .env.example .env   # DISCORD_TOKEN eintragen
-   npm install
-   npm start
+1. [Discord Developer Portal](https://discord.com/developers/applications) → **New Application** → name it e.g. *Loot and Liberty*.
+2. **Bot** → **Reset Token** → copy the token (keep it secret!).
+3. **Bot → Privileged Gateway Intents**: enable **Server Members Intent** and **Message Content Intent**.
+4. Invite the bot (replace `YOUR_APP_ID` with the *Application ID* from *General Information*):
    ```
-6. Im Discord als Admin: `/einrichten leaderkanal:#loot-leitung lootkanal:#loot`, danach `/leader hinzufügen wer:@Leader`.
+   https://discord.com/oauth2/authorize?client_id=YOUR_APP_ID&scope=bot+applications.commands&permissions=326417640512
+   ```
+5. Create two channels: a **leader channel** (only leaders + the bot can see it) and a **loot channel**. The bot needs:
+   - **Leader channel:** View Channel, Send Messages, Embed Links, Attach Files, Read Message History, Add Reactions, **Manage Messages** (clean-up)
+   - **Loot channel:** View Channel, Send Messages, Embed Links, Attach Files, Create Public Threads, Send Messages in Threads, **Manage Threads** (closing threads)
 
-### Konfiguration (`.env`)
-
-| Variable | Bedeutung |
-| --- | --- |
-| `DISCORD_TOKEN` | Bot-Token |
-| `LOOT_LEADER_CHANNEL_ID`, `LOOT_CHANNEL_ID` | Optional: Vorgabe für die Kanäle. `/einrichten` hat Vorrang |
-| `BOT_ADMIN_IDS` | Optional: zusätzliche Bot-Admins (Nutzer-IDs, kommagetrennt) |
-| `LOOT_ROLL_HOURS` | Optional: Vorgabe für die Rollzeit in Stunden, Standard 24. `/einrichten rollzeit:` hat Vorrang |
-| `BOT_NAME` | Optional, Standard `Loot and Liberty` |
-| `DATA_FILE` | Optional, Standard `data/sessions.json`. Hier liegen offene Verlosungen, Leader und Kanal-Einstellungen |
-
-## Entwicklung
+### 2. Run the bot
 
 ```bash
+git clone https://github.com/B0R0AK/Loot-and-Liberty.git
+cd Loot-and-Liberty
+npm install --omit=dev
+cp .env.example .env      # enter DISCORD_TOKEN
+npm start
+```
+
+<details>
+<summary>Run permanently on a Linux server (systemd)</summary>
+
+```ini
+# /etc/systemd/system/loot-and-liberty.service
+[Unit]
+Description=Loot and Liberty Discord bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=lootbot
+WorkingDirectory=/opt/loot-and-liberty/app
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now loot-and-liberty
+sudo journalctl -u loot-and-liberty -f      # logs
+# update:
+cd /opt/loot-and-liberty/app && sudo -u lootbot git pull && sudo -u lootbot npm install --omit=dev && sudo systemctl restart loot-and-liberty
+```
+</details>
+
+### 3. Configure in Discord
+
+```
+/setup leaderchannel:#loot-leaders lootchannel:#loot language:English
+/leader add who:@Officers
+```
+
+Then post a screenshot or Questlog link in the leader channel. 🎲
+
+### Configuration (`.env`)
+
+| Variable | Meaning |
+| --- | --- |
+| `DISCORD_TOKEN` | Bot token (required) |
+| `LOOT_LEADER_CHANNEL_ID`, `LOOT_CHANNEL_ID` | Optional defaults for the channels – `/setup` takes precedence |
+| `BOT_ADMIN_IDS` | Optional additional bot admins (user IDs, comma-separated) |
+| `LOOT_ROLL_HOURS` | Optional default roll time in hours (24) – `/setup rolltime:` takes precedence |
+| `LOOT_LANGUAGE` | Optional default language `de`/`en` (`de`) – `/setup language:` takes precedence |
+| `BOT_NAME` | Optional, default `Loot and Liberty` |
+| `DATA_FILE` | Optional, default `data/sessions.json` (loot rolls, leaders, settings) |
+
+## Development
+
+```bash
+npm install
 npm test
 ```
 
-| Datei | Inhalt |
+| File | Content |
 | --- | --- |
-| `src/session.js` | Verlosungslogik: Würfeln, Passen, Roll-Gründe, Gewinner (ohne Discord-Abhängigkeit) |
-| `src/item.js` | Screenshot/Questlog-Link erkennen, Name über Questlogs Daten-Schnittstelle |
-| `src/itemcard.js` | Item-Karte (PNG) mit Stats aus Questlog-Daten zeichnen |
-| `src/render.js` | Embeds, Auswahlmenüs, Buttons |
-| `src/bot.js` | Discord-Ablauf: Leader-Kanal, Auswahl, Item-Post + Thread, Rollzeit, Panel, Befehle |
-| `src/commands.js` | Slash-Commands `/leader`, `/einrichten`, `/loot`, `/hilfe` |
-| `src/store.js` | Speichern von Verlosungen, Leadern und Kanälen als JSON |
-| `src/index.js` | Start, Intents, Konfiguration |
+| `src/session.js` | Loot roll logic: roll, pass, reasons, winner, roll time (no Discord dependency) |
+| `src/i18n.js` | All texts in German and English |
+| `src/item.js` | Detect screenshots/Questlog links, item names via Questlog's data API |
+| `src/itemcard.js` | Draw the item card (PNG) with stats from Questlog data |
+| `src/render.js` | Embeds, menus, buttons, pop-ups |
+| `src/bot.js` | Discord flow: leader channel, item post + thread, roll time, panel, groups, commands |
+| `src/commands.js` | Slash commands (English names with German translations) |
+| `src/store.js` | Persistence of loot rolls, groups, leaders and settings (JSON) |
+| `src/index.js` | Startup, intents, configuration |
 
-## Bekannte Grenzen und Ideen
+Item data and icons come from [questlog.gg](https://questlog.gg/throne-and-liberty). This project is not affiliated with Questlog, NCSOFT or Amazon Games.
 
-- Die Frage „Wer darf rollen?“ läuft nach 30 Minuten ab und überlebt keinen Neustart. Laufende Verlosungen samt Rollzeit bleiben erhalten.
-- Gewinner- und Zurücksetzen-Menü zeigen höchstens 25 Einträge (Discord-Limit).
-- Geplant: mehrere Würfe pro Spieler und ein anderer Zahlenbereich. `LootSession` hat dafür schon `rollMax`.
+## License
+
+[MIT](LICENSE)

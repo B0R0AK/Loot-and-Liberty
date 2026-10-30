@@ -31,6 +31,7 @@ const store = new SessionStore(process.env.DATA_FILE || 'data/sessions.json', {
     leaderChannelId: process.env.LOOT_LEADER_CHANNEL_ID?.trim() || null,
     lootChannelId: process.env.LOOT_CHANNEL_ID?.trim() || null,
     rollHours: Number(process.env.LOOT_ROLL_HOURS) || 24,
+    language: process.env.LOOT_LANGUAGE?.trim() || 'de',
   },
 }).load();
 
